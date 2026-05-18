@@ -170,42 +170,41 @@ function [] = cascade_MIMO_01_raw2slc(path2proj,filt_by_dist,filt_by_azi,filt_by
     t0 = tic;
     
     fclose(fid);
+
+    stepSize = 50; % Define the step size
     
     for i_file = 1:(length(fileIdx_unique))
-    
         % Get File Names for the Master, Slave1, Slave2, Slave3   
         [fileNameStruct]= getBinFileNames_withIdx(path_files, fileIdx_unique{i_file});        
-    
         % pass the Data File to the calibration Object
         calibrationObj.binfilePath = fileNameStruct;
-    
         % Get Valid Number of Frames 
         [numValidFrames, ~] = getValidNumFrames(fullfile(path_files, fileNameStruct.masterIdxFile));
-        
-        
         % intentionally skip the first frame due to TDA2 
         if i_file == 1 % Skip the first frame of the dataset
             startValidFrame = 2;
         else
             startValidFrame = 1;
-            
         end
-    
+        
         no_of_local_acquisitions = numValidFrames-(startValidFrame-1);
-    
         step_i = step_i + 1;
-    
-        for frameIdx = startValidFrame:numValidFrames
-    
+        
+        % --- NEW: Initialize the output index counter for this file ---
+        outIdx = 0; 
+        
+        % --- MODIFIED: Added :stepSize: to skip frames ---
+        for frameIdx = startValidFrame:stepSize:numValidFrames
             % read and calibrate raw ADC data            
             calibrationObj.frameIdx = frameIdx;
             frameCountGlobal = frameCountGlobal+1;
-            frameCountLocal = frameIdx-(startValidFrame-1);
+            
+            % --- NEW: Increment the compact output index ---
+            outIdx = outIdx + 1;
+            
             adcData = datapath(calibrationObj);
-    
             % RX Channel re-ordering
             adcData = adcData(:,:,calibrationObj.RxForMIMOProcess,:);            
-    
             filt_type = 'hanning';
             numAngles = 256;
             [complex_data_static_tmp,...
@@ -216,24 +215,25 @@ function [] = cascade_MIMO_01_raw2slc(path2proj,filt_by_dist,filt_by_azi,filt_by
                                  filt_type,...
                                  numAngles,...
                                  antenna_azimuthonly);
-    
-            if frameCountLocal == 1
-                complex_data_static = zeros([size(complex_data_static_tmp),no_of_local_acquisitions]);
-                %complex_data_dynamic = zeros([size(complex_data_dynamic_tmp),no_of_local_acquisitions]);
+            
+            % --- MODIFIED: Pre-allocate with the correct reduced size ---
+            if outIdx == 1
+                numProcessed = ceil(no_of_local_acquisitions / stepSize);
+                complex_data_static = zeros([size(complex_data_static_tmp), numProcessed]);
+                %complex_data_dynamic = zeros([size(complex_data_dynamic_tmp), numProcessed]);
             end
             
-            complex_data_static(:,:,frameCountLocal) = complex_data_static_tmp;
-    
+            % --- MODIFIED: Use outIdx instead of frameCountLocal to avoid gaps ---
+            complex_data_static(:,:,outIdx) = complex_data_static_tmp;
+            
             time_i = toc(t0)/frameCountGlobal;
             time_rem = time_i*(totNumFrames-frameCountGlobal);
             time_rem_min = floor(time_rem/60);
             time_rem_sec = floor(time_rem - (time_rem_min*60));
             time_end = datetime() + seconds(time_rem);
-    
             if exist('lineLength','var')
                 fprintf(repmat('\b',1,lineLength));
             end
-    
             print_str = sprintf("Step %02d: Frame % 5d processed (SLC).",...
                                 step_i,...
                                 frameCountGlobal);
@@ -247,22 +247,114 @@ function [] = cascade_MIMO_01_raw2slc(path2proj,filt_by_dist,filt_by_azi,filt_by
                         datestr(time_end,"dd.mm.yyyy HH:MM:SS"));
             end
         end
-    
+        
         clearvars lineLength
-    
         ind = strfind(path_files, filesep);
         testName = path_files(ind(end-1)+1:(ind(end)-1));
         path_mat_03 = fullfile(path_out,sprintf("%s_%05d.mat",...
                                                     testName,...
                                                     i_file)); 
-    
         %% Calculate Coherence of first to second, to N/2, and to N
         step_i = step_i + 1;
         fprintf('Step %02d: Calculate Coherences.\n',step_i);
-            
         step_i = step_i + 1;
+        
+        % No changes needed below because complex_data_static is now correctly sized
         coherence = zeros(size(complex_data_static));
         N_slc = size(complex_data_static,3);
+    
+    % for i_file = 1:(length(fileIdx_unique))
+    % 
+    %     % Get File Names for the Master, Slave1, Slave2, Slave3   
+    %     [fileNameStruct]= getBinFileNames_withIdx(path_files, fileIdx_unique{i_file});        
+    % 
+    %     % pass the Data File to the calibration Object
+    %     calibrationObj.binfilePath = fileNameStruct;
+    % 
+    %     % Get Valid Number of Frames 
+    %     [numValidFrames, ~] = getValidNumFrames(fullfile(path_files, fileNameStruct.masterIdxFile));
+    % 
+    % 
+    %     % intentionally skip the first frame due to TDA2 
+    %     if i_file == 1 % Skip the first frame of the dataset
+    %         startValidFrame = 2;
+    %     else
+    %         startValidFrame = 1;
+    % 
+    %     end
+    % 
+    %     no_of_local_acquisitions = numValidFrames-(startValidFrame-1);
+    % 
+    %     step_i = step_i + 1;
+    % 
+    %     for frameIdx = startValidFrame:numValidFrames
+    % 
+    %         % read and calibrate raw ADC data            
+    %         calibrationObj.frameIdx = frameIdx;
+    %         frameCountGlobal = frameCountGlobal+1;
+    %         frameCountLocal = frameIdx-(startValidFrame-1);
+    %         adcData = datapath(calibrationObj);
+    % 
+    %         % RX Channel re-ordering
+    %         adcData = adcData(:,:,calibrationObj.RxForMIMOProcess,:);            
+    % 
+    %         filt_type = 'hanning';
+    %         numAngles = 256;
+    %         [complex_data_static_tmp,...
+    %          complex_data_dynamic_tmp,...
+    %          x_axis,...
+    %          y_axis] = adc2slc(adcData,...
+    %                              rangeBinSize,...
+    %                              filt_type,...
+    %                              numAngles,...
+    %                              antenna_azimuthonly);
+    % 
+    %         if frameCountLocal == 1
+    %             complex_data_static = zeros([size(complex_data_static_tmp),no_of_local_acquisitions]);
+    %             %complex_data_dynamic = zeros([size(complex_data_dynamic_tmp),no_of_local_acquisitions]);
+    %         end
+    % 
+    %         complex_data_static(:,:,frameCountLocal) = complex_data_static_tmp;
+    % 
+    %         time_i = toc(t0)/frameCountGlobal;
+    %         time_rem = time_i*(totNumFrames-frameCountGlobal);
+    %         time_rem_min = floor(time_rem/60);
+    %         time_rem_sec = floor(time_rem - (time_rem_min*60));
+    %         time_end = datetime() + seconds(time_rem);
+    % 
+    %         if exist('lineLength','var')
+    %             fprintf(repmat('\b',1,lineLength));
+    %         end
+    % 
+    %         print_str = sprintf("Step %02d: Frame % 5d processed (SLC).",...
+    %                             step_i,...
+    %                             frameCountGlobal);
+    %         if frameCountGlobal/totNumFrames<0.1
+    %             lineLength = fprintf("%s\n",print_str);
+    %         else
+    %             lineLength = fprintf("%s (Ending in %d:%02dmin at %s)\n",...
+    %                     print_str,...
+    %                     time_rem_min,...
+    %                     time_rem_sec,...
+    %                     datestr(time_end,"dd.mm.yyyy HH:MM:SS"));
+    %         end
+    %     end
+    % 
+    %     clearvars lineLength
+    % 
+    %     ind = strfind(path_files, filesep);
+    %     testName = path_files(ind(end-1)+1:(ind(end)-1));
+    %     path_mat_03 = fullfile(path_out,sprintf("%s_%05d.mat",...
+    %                                                 testName,...
+    %                                                 i_file)); 
+    % 
+    %     %% Calculate Coherence of first to second, to N/2, and to N
+    %     step_i = step_i + 1;
+    %     fprintf('Step %02d: Calculate Coherences.\n',step_i);
+    % 
+    %     step_i = step_i + 1;
+    %     coherence = zeros(size(complex_data_static));
+    %     N_slc = size(complex_data_static,3);
         for slc_i = 1:N_slc
             coherence(:,:,slc_i) = get_coherence(complex_data_static(:,:,1),...
                                             complex_data_static(:,:,slc_i),...

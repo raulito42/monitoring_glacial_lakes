@@ -104,15 +104,55 @@
 % by Andreas Baumann-Ouyang, ETH Zürich (27th July 2022)
 
 
-function [] = cascade_MIMO_02_slc2psi(path2proj,...
-                                      filt_by_rng,...
-                                      filt_by_lr,...
-                                      filt_by_azi,...
-                                      filt_by_asi,...
-                                      filt_by_coh,...
-                                      filt_by_mrd,...
-                                      filt_by_time,...
-                                      filt_by_aoi)
+function cascade_MIMO_02_slc2psi(path2proj,... 
+    filt_by_rng, filt_by_lr,...
+    filt_by_azi, filt_by_asi,...
+    filt_by_coh,...
+    filt_by_maxDisp,...
+    filt_by_time,...
+    filt_by_aoi)
+    
+    %% --- HIDDEN AUTO-CONFIG BLOCK ---
+    filt_by_mrd = filt_by_maxDisp;
+    num_antenna = 86;
+    length_antenna = 3;
+    % 1. Find JSON
+    f_json = dir(fullfile(path2proj, '01_Raw_Radar_Data', '*.mmwave.json'));
+    if isempty(f_json)
+        error('JSON config not found in %s', path2proj);
+    end
+    p = JsonParser(fullfile(f_json(1).folder, f_json(1).name));
+    
+    % 2. Calculate Lambda
+    c0 = physconst('LightSpeed');
+    slope = p.DevConfig(1).Profile.FreqSlope;
+    adc_rate = p.DevConfig(1).Profile.SamplingRate * 1e3;
+    num_ADC_smpl = p.DevConfig(1).Profile.NumSamples;
+    bw_chirp = (num_ADC_smpl / adc_rate) * slope * 1e12;
+    centerFreq = (p.DevConfig(1).Profile.StartFreq * 1e9) + (bw_chirp / 2); 
+    lambda = c0 / centerFreq;
+    rng_res = c0 / (2 * bw_chirp);
+    
+    % 3. Extract Start Time from Folder Name
+    % Logic: Look for YYYYMMDD_HHMMSS in the path string
+    time_tokens = regexp(path2proj, '(\d{8})_(\d{6})', 'tokens');
+    if ~isempty(time_tokens)
+        start_time = datetime([time_tokens{1}{1} time_tokens{1}{2}], 'InputFormat', 'yyyyMMddHHmmss');
+    else
+        start_time = datetime('now'); % Fallback
+    end
+    
+    % 4. Build Timestamps
+    % Using 'Periodicity' which we identified earlier
+    frame_period = p.DevConfig(1).FrameConfig.Periodicity;
+    num_frames_raw   = p.DevConfig(1).FrameConfig.NumFrames;
+    data_hz_raw  = 1000 / frame_period;
+    timestamp_abs = start_time + (0:num_frames_raw-1) * seconds(1/data_hz_raw);
+
+    % 5. Standard Radar Position (Fixed for your setup)
+    radar_position = [0, 0, 1.5]; 
+    radar_orient   = [91.4, -1.2, 90.000];
+    %% --- END HIDDEN BLOCK ---
 
     [~,proj_name,~]= fileparts(path2proj);
     name_folder = sprintf('03_PSI_Interfero');
@@ -123,9 +163,32 @@ function [] = cascade_MIMO_02_slc2psi(path2proj,...
     end
 
     %% Data to be loaded
+    %% --- DATA LOADING ---
+    path_to_slc = fullfile(path2proj, '02_SLC_Radar_data');
+    
+    % This loads the .mat files and creates 'cplx'
+    [x_axis, y_axis, cplx, coh, ~] = load_slc_files(path_to_slc);
+    num_frames_loaded = size(cplx, 2);
+    
+    % Calculate the "Effective Step Size" automatically
+    % This compares how many frames the JSON expected vs what was actually loaded
+    eff_step = max(1, floor(num_frames_raw / num_frames_loaded));
+    
+    % Generate timestamps that EXACTLY match the number of columns in 'cplx'
+    frame_indices = (0:num_frames_loaded-1) * eff_step;
+    timestamp_abs = start_time + seconds(frame_indices * (frame_period/1000));
+    timestamp_rel = seconds(timestamp_abs - timestamp_abs(1));
+    
+    % Update data_hz to the decimated rate for processing logic
+    data_hz = 1000 / (frame_period * eff_step);
+    
+    % Pack for plotting
+    data.x_axis = x_axis;
+    data.y_axis = y_axis;
+    data.coh    = coh.mean;
     step_i = 1;
     fprintf('Step % 2d: Processing Radar Data (%s)\n', step_i, proj_name);
-    run(sprintf("%s.m",proj_name));
+    %run(sprintf("%s.m",proj_name));
     
     scale_rad2mm = lambda / (4*pi) * 1000; % from radian to mm
     N_obs = 2*data_hz; % Average over first 2 seconds of observations and shift.
@@ -159,7 +222,7 @@ function [] = cascade_MIMO_02_slc2psi(path2proj,...
         end
     end
     
-
+    sct_rng = filt_by_rng{3};
     %% Geometrical Filtering based on Area of Interest
     if filt_by_aoi{1}==1
         path2aoi = fullfile(path2store,'aoi.mat');
@@ -435,17 +498,38 @@ function [] = cascade_MIMO_02_slc2psi(path2proj,...
     xlimits = xlimits + [-1 1] * abs(diff(ylimits)) * 0.05;
     
     %% Amplitude
+    % ax(1)=subplot(2,2,1); 
+    % ampl = log10(mean(data.ampl,2));
+    % plot_polar_range_azimuth_2D_AB_preAX(data.y_axis,...
+    %                                      data.x_axis,...
+    %                                      ampl,...
+    %                                      ylimits,xlimits,'scatter');
+    % hcb = colorbar;
+    % hcb.Label.String = "Amplitude [log10(A)]";
+    % climits_val = [floor(prctile(ampl,5)),ceil(prctile(ampl,95))];
+    % clim(climits_val);
+    % caxis(climits_val);
+    %% Amplitude (Forced Sidelobe Clean Up)
     ax(1)=subplot(2,2,1); 
     ampl = log10(mean(data.ampl,2));
+    
+    % --- NEW: Clear out the background noise floor manually ---
+    % Find a cutoff value just above the arc background level
+    cutoff_noise = prctile(ampl, 35); 
+    ampl_clean = ampl;
+    ampl_clean(ampl_clean < cutoff_noise) = cutoff_noise; 
+    % ----------------------------------------------------------
+    
     plot_polar_range_azimuth_2D_AB_preAX(data.y_axis,...
                                          data.x_axis,...
-                                         ampl,...
+                                         ampl_clean,... % Plot the cleaned matrix
                                          ylimits,xlimits,'scatter');
     hcb = colorbar;
     hcb.Label.String = "Amplitude [log10(A)]";
-    climits_val = [floor(prctile(ampl,50)),ceil(prctile(ampl,95))];
+    
+    % Match your custom 5% to 95% limits
+    climits_val = [prctile(ampl_clean,5), prctile(ampl_clean,95)];
     clim(climits_val);
-    caxis(climits_val);
     box on
     axis equal
     

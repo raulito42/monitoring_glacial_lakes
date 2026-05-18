@@ -45,7 +45,7 @@ ploting_fig = 0;
 %numAngles = 256; % for SAR resolution: numAngles = N_VA; (e.g. 86)
 RangeBinDiscard_atEnd = 0; % Remove the last N range bins.
 RangeBinDiscard_atStart = 0; % Remove the first N range bins.
-filt_az = 0; % Apply Window Filtering on Azimuth
+filt_az = 1; % Apply Window Filtering on Azimuth
 
 if ~exist('ant_az_id','var')
    ant_az_id = 1:numRXA*numTXA; 

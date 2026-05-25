@@ -1,4 +1,3 @@
-%% plot_results.m - Memory-Optimized Mask Router & Viewer (Optimized for Parameter Tuning)
 clear; clc; close all;
 % 1. Set paths
 [file_dir,~,~] = fileparts(matlab.desktop.editor.getActiveFilename);
@@ -7,12 +6,24 @@ name2proj = 'MIMO_C77_GS_P3_001_15min_20260519_130316_00910000ms';
 path2proj = fullfile(file_dir, 'D00_sample_data', 'real', name2proj);
 fname = '01_SLC_Filt.mat';
 path2mat = fullfile(path2proj, '03_PSI_Interfero', fname);
+
 if ~isfile(path2mat)
     error('File not found! Verify your sample paths.');
 end
+
 % Cache files
 path_kmeans_cluster = fullfile(path2proj, 'kmeans_cluster.mat');
 path_adjusted_cluster = fullfile(path2proj, 'adj_cluster.mat');
+
+% =========================================================================
+% AUTOMATED EXPORT DIRECTORY ENGINE
+% =========================================================================
+export_dir = fullfile(path2proj, 'export');
+if ~exist(export_dir, 'dir')
+    mkdir(export_dir);
+    fprintf('Created project export subdirectory at: %s\n', export_dir);
+end
+
 % Define processing window spatial boundaries (for unified cropping)
 min_range = 10;   max_range = 60;
 min_angle = -50;  max_angle = 50; 
@@ -102,15 +113,12 @@ else
     
     % 3. Apply Convolution Median Filtering
     filter_kernel = [5,5];
-    se = strel('rectangle', filter_kernel);
-    % mean_kernel = ones(filter_kernel) / prod(filter_kernel);
+    se = strel('rectangle', [5,5]);
 
     fprintf('Running 2D median filter convolution on log-scaled arrays...\n');
     grid_amp_filtered   = imdilate(grid_amp, se);
     grid_pvar_filtered  = medfilt2(grid_pvar, filter_kernel);
     grid_coher_filtered = medfilt2(grid_coher, filter_kernel);
-    % grid_pvar_filtered = filter2(mean_kernel, grid_pvar);
-    % grid_coher_filtered = filter2(mean_kernel, grid_coher);
     
     % 4. Sample the smoothed 2D grid back down to original 1D data structures
     smooth_amp_gamma = interp2(XQ, YQ, grid_amp_filtered, x_axis, y_axis, 'linear');
@@ -127,42 +135,68 @@ else
     global_coherence = smooth_coherence;
 
     % =========================================================================
-    % VISUALIZATION 1: COHERENCE & AMPLITUDE CONVOLUTION PLOTS
+    % VISUALIZATION 1: DUAL-CHANNEL PRE-CLUSTERING SIGNAL CONDITIONING DIAGNOSTICS
     % =========================================================================
     filter_fig = figure('Name', 'Pre-Clustering Data Filtering Verification Workspace', ...
-                        'units', 'normalized', 'outerposition', [0.05 0.05 0.9 0.9]);
+                        'Units', 'centimeters', 'Position', [2, 2, 28, 24]); 
     ylim_p = [min(y_axis), max(y_axis)]; xlim_p = [min(x_axis), max(x_axis)];
     
-    % --- TOP ROW: COHERENCE PROFILES ---
-    ax_f(1) = subplot(2,2,1);
+    % --- ROW 1: COHERENCE PROFILES ---
+    ax_f(1) = subplot(3,2,1);
     plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, global_coherence_raw, ylim_p, xlim_p, 'scatter');
-    title('1A. Raw Coherence Profile (Noisy Input)', 'FontSize', 11); 
+    title('1A. Raw Coherence Profile (Noisy Input)', 'FontSize', 11, 'FontWeight', 'bold'); 
     colorbar; colormap(ax_f(1), jet); clim([0 1]); axis equal; grid on;
     
-    ax_f(2) = subplot(2,2,2);
+    ax_f(2) = subplot(3,2,2);
     plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, global_coherence, ylim_p, xlim_p, 'scatter');
-    title('1B. Filtered Coherence (2D Median Smoothed)', 'FontSize', 11); 
+    title('1B. Filtered Coherence (2D Median Smoothed)', 'FontSize', 11, 'FontWeight', 'bold'); 
     colorbar; colormap(ax_f(2), jet); clim([0 1]); axis equal; grid on;
     
-    % --- BOTTOM ROW: AMPLITUDE PROFILES ---
-    ax_f(3) = subplot(2,2,3);
+    % --- ROW 2: AMPLITUDE PROFILES ---
+    ax_f(3) = subplot(3,2,3);
     plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, global_amp_raw, ylim_p, xlim_p, 'scatter');
-    title('2A. Raw Normalized Amplitude (\gamma-Scaled)', 'FontSize', 11); 
+    title('2A. Raw Normalized Amplitude (\gamma-Scaled)', 'FontSize', 11, 'FontWeight', 'bold'); 
     colorbar; colormap(ax_f(3), hot); clim([0 max(global_amp_raw)*0.85]); axis equal; grid on;
     
-    ax_f(4) = subplot(2,2,4);
+    ax_f(4) = subplot(3,2,4);
     plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, global_amp_gamma, ylim_p, xlim_p, 'scatter');
-    title('2B. Filtered Amplitude (2D Median Smoothed)', 'FontSize', 11); 
+    title('2B. Filtered Amplitude (2D Max Convolution)', 'FontSize', 11, 'FontWeight', 'bold'); 
     colorbar; colormap(ax_f(4), hot); clim([0 max(global_amp_raw)*0.85]); axis equal; grid on;
+
+    % --- ROW 3: NEW: PHASE VARIANCE PROFILES ---
+    ax_f(5) = subplot(3,2,5);
+    plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, global_phase_var, ylim_p, xlim_p, 'scatter');
+    title('3A. Raw Phase Variance Profile (\sigma_\phi^2)', 'FontSize', 11, 'FontWeight', 'bold'); 
+    colorbar; colormap(ax_f(5), parula); clim([0 max(global_phase_var)*0.75]); axis equal; grid on;
     
+    ax_f(6) = subplot(3,2,6);
+    plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, smooth_phase_var, ylim_p, xlim_p, 'scatter');
+    title('3B. Filtered Phase Variance (2D Median Smoothed)', 'FontSize', 11, 'FontWeight', 'bold'); 
+    colorbar; colormap(ax_f(6), parula); clim([0 max(global_phase_var)*0.75]); axis equal; grid on;
+    
+    % Sync zooming and panning parameters across all 6 subplots
     linkprop(ax_f, {'XLim', 'YLim'});
-    sgtitle('Dual-Channel Pre-Clustering Signal Conditioning Diagnostics', 'FontSize', 14, 'FontWeight', 'bold');
+    
+    sgtitle('Multi-Channel Pre-Clustering Signal Conditioning Diagnostics', ...
+            'FontSize', 14, 'FontWeight', 'bold', 'FontName', 'Helvetica');
     drawnow;
+
+    % =========================================================================
+    % ROUTED HIGH-RESOLUTION PNG EXPORT
+    % =========================================================================
+    output_filename1 = fullfile(export_dir, 'signal_conditioning_analysis.png');
+    fprintf('Exporting full 6-panel matrix as a 300 DPI PNG to: %s\n', output_filename1);
+    
+    filter_fig.Units = 'centimeters';
+    filter_fig.Position = [0, 0, 30, 36]; 
+    
+    exportgraphics(filter_fig, output_filename1, 'Resolution', 300, 'BackgroundColor', 'none');               
+    fprintf('=== PNG Export Complete! ===\n');
 
     % 5. Execute 3-Class Weighted K-Means on the newly filtered features
     fprintf('Running 3-Class Weighted K-Means on conditioned features...\n');
     base_features = zscore([smooth_amp_gamma, smooth_phase_var, smooth_coherence]);
-    feature_weights = [0.5, 0.0, 2.2]; % Amplitude, Phase Variance, Coherence weights
+    feature_weights = [0.5, 0.0, 2.2]; 
     global_features_scaled = base_features .* feature_weights;
 
     global_clusters = kmeans(global_features_scaled, 3, 'Replicates', 15);
@@ -181,9 +215,7 @@ else
     raw_sparse_land_mask = (global_clusters == land_cluster_ID);
     raw_transition_mask  = (global_clusters == transition_cluster_ID);
 
-    % Save updated configurations
     fprintf('Saving 3-Class K-Means features to: %s\n', path_kmeans_cluster);
-    % save(path_kmeans_cluster, 'raw_sparse_land_mask', 'raw_transition_mask', 'x_axis', 'y_axis', 'timestamp_abs', '-v7.3');
     clear cplx;
 end
 
@@ -193,69 +225,100 @@ sparse_land_y = y_axis(raw_sparse_land_mask);
 if isempty(sparse_land_x)
     error('No land points detected. Check your K-Means clustering initialization settings.');
 end
+
 % =========================================================================
 % ADAPTIVE GEOMETRY ENGINE
 % =========================================================================
 sparse_ranges = sqrt(sparse_land_x.^2 + sparse_land_y.^2);
 mean_sparse_range = median(sparse_ranges);
-dbscan_epsilon = max(1.8, mean_sparse_range * 0.09); 
-if mean_sparse_range > 40
+dbscan_epsilon = max(2.2, mean_sparse_range * 0.09); 
+if mean_sparse_range > 30
     dbscan_min_pts = 6;   
 else
     dbscan_min_pts = 12;  
 end
-alpha_radius = dbscan_epsilon * 0.55; 
+alpha_radius = dbscan_epsilon * 0.9; 
 fprintf('--> Dynamic Calibration Complete at Mean Range: %.1fm\n', mean_sparse_range);
 spatial_clusters = dbscan([sparse_land_x, sparse_land_y], dbscan_epsilon, dbscan_min_pts);
 valid_cluster_idx = (spatial_clusters > 0);
+
 if ~any(valid_cluster_idx)
     warning('DBSCAN dropped all land elements. Falling back to default backup parameters.');
     spatial_clusters = dbscan([sparse_land_x, sparse_land_y], 3.5, 10);
     valid_cluster_idx = (spatial_clusters > 0);
 end
+
 if ~any(valid_cluster_idx)
-    clean_land_x = sparse_land_x; clean_land_y = sparse_land_y;
+    clean_land_x = sparse_land_x; 
+    clean_land_y = sparse_land_y;
 else
     unique_clusters = unique(spatial_clusters(valid_cluster_idx));
     cluster_sizes = histcounts(spatial_clusters(valid_cluster_idx), [unique_clusters; max(unique_clusters)+1]);
-    [~, largest_idx] = max(cluster_sizes);
-    land_density_mask = (spatial_clusters == unique_clusters(largest_idx));
+    
+    % --- NEW: KEEP ALL ROBUST CLUSTERS ---
+    significant_cluster_mask = cluster_sizes > 15; 
+    valid_land_clusters = unique_clusters(significant_cluster_mask);
+    
+    if isempty(valid_land_clusters)
+        [~, largest_idx] = max(cluster_sizes);
+        valid_land_clusters = unique_clusters(largest_idx);
+    end
+    
+    land_density_mask = ismember(spatial_clusters, valid_land_clusters);
+    
     clean_land_x = sparse_land_x(land_density_mask);
     clean_land_y = sparse_land_y(land_density_mask);
 end
+
 fprintf('Solid-filling ground mask using alpha-envelopes...\n');
 shp = alphaShape(clean_land_x, clean_land_y, alpha_radius);
 binary_land_mask = inShape(shp, x_axis, y_axis);
 fprintf('Exporting finalized mask metrics to cache: %s\n', path_adjusted_cluster);
-% save(path_adjusted_cluster, 'binary_land_mask', 'raw_sparse_land_mask', 'raw_transition_mask', 'x_axis', 'y_axis', 'timestamp_abs');
+
 %% 4.5 COMPARISON PLOT DISPLAY & INTERACTIVE ROI SELECTION
 fprintf('Generating comparison plots...\n');
 comp_fig = figure('Name', 'Spatial Processing Comparison & ROI Selection', ...
                   'units', 'normalized', 'outerposition', [0.1 0.3 0.8 0.5]);
 comp_ylim = [min(y_axis), max(y_axis)] + [-1 1] * abs(diff([min(y_axis), max(y_axis)])) * 0.02;
 comp_xlim = [min(x_axis), max(x_axis)] + [-1 1] * abs(diff([min(y_axis), max(y_axis)])) * 0.02;
+
 % Subplot 1: 3-Class Unstructured Map
 ax_comp(1) = subplot(1, 2, 1);
 categorical_map = zeros(size(raw_sparse_land_mask));
 categorical_map(raw_transition_mask) = 1;
 categorical_map(raw_sparse_land_mask) = 2;
 plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, categorical_map, comp_ylim, comp_xlim, 'scatter');
-title('1. 3-Class Cleaned Mask (Pre-Filtered Core)', 'FontSize', 12);
+title('1. 3-Class Cleaned Mask (Pre-Filtered Core)', 'FontSize', 12, 'FontWeight', 'bold');
 h_cb1 = colorbar; h_cb1.Ticks = [0, 1, 2]; h_cb1.TickLabels = {'Open Water', 'Transition Zone', 'Stable Land'};
 colormap(ax_comp(1), [0.15 0.35 0.65; 0.95 0.60 0.10; 0.75 0.15 0.15]); clim([0, 2]); axis equal; box on; grid on;
+
 % Subplot 2: Solid Infilled Mask Layout 
 ax_comp(2) = subplot(1, 2, 2);
 infilled_3class_map = zeros(size(binary_land_mask));
 infilled_3class_map(raw_transition_mask) = 1;
 infilled_3class_map(binary_land_mask) = 2;
 plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, infilled_3class_map, comp_ylim, comp_xlim, 'scatter');
-title('2. Click to Draw Tracking ROI (Double-click to finalize)', 'FontSize', 12);
+title('2. Target Tracking ROI Configuration Space', 'FontSize', 12, 'FontWeight', 'bold');
 h_cb2 = colorbar; h_cb2.Ticks = [0, 1, 2]; h_cb2.TickLabels = {'Open Water', 'Transition Zone', 'Solid Ground Core'};
 colormap(ax_comp(2), [0.15 0.35 0.65; 0.95 0.60 0.10; 0.75 0.15 0.15]); clim([0, 2]); axis equal; box on; grid on;
+
 linkproperties = linkprop(ax_comp, {'XLim', 'YLim'});
 setappdata(comp_fig, 'ComparisonLink', linkproperties);
-sgtitle('3-Class Morphological Optimization & Region of Interest Selection', 'FontSize', 14, 'FontWeight', 'bold');
+% sgtitle('3-Class Morphological Optimization & Region of Interest Selection', 'FontSize', 14, 'FontWeight', 'bold', 'FontName', 'Helvetica');
 drawnow;
+
+% =========================================================================
+% ROUTED HIGH-RESOLUTION PNG EXPORT
+% =========================================================================
+output_filename2 = fullfile(export_dir, 'morphological_roi_selection.png');
+fprintf('Exporting side-by-side comparison matrix as a 300 DPI PNG to: %s\n', output_filename2);
+
+comp_fig.Units = 'centimeters';
+comp_fig.Position = [0, 0, 30, 14]; 
+
+exportgraphics(comp_fig, output_filename2, 'Resolution', 300, 'BackgroundColor', 'none');
+fprintf('=== ROI Comparison Export Complete! ===\n');
+
 % --- INTERACTIVE ROI DRAWING STEP ---
 fprintf('\n[ACTION REQUIRED]: Click vertices on Subplot 2 to draw an ROI polygon.\n');
 roi_tool = drawpolygon(ax_comp(2), 'Color', 'r', 'LineWidth', 1.5);
@@ -282,8 +345,8 @@ if ~exist('cplx', 'var')
 end
 
 %% 5. CHRONOLOGICAL WINDOW TIMELINE CONFIGURATION (Graphics Initialization)
-window_duration = seconds(5); 
-step_duration = seconds(5);   
+window_duration = seconds(15); 
+step_duration = seconds(15);   
 start_time = timestamp_abs(1);
 end_time = timestamp_abs(end);
 
@@ -298,12 +361,25 @@ max_estimated_loops = floor(seconds(end_time - start_time) / seconds(step_durati
 tracked_shoreline_range = NaN(max_estimated_loops, 1);
 relative_waterframe_shift = NaN(max_estimated_loops, 1);
 time_axis = NaT(max_estimated_loops, 1);
-coherence_water_threshold = 0.40; 
+coherence_water_threshold = 0.35; 
 
 baseline_range = [];
 
-% Build Fast-Update Interface Layout
-fig = figure('Name', 'Interactive ROI Shoreline Tracking Dashboard', 'units', 'normalized', 'outerposition', [0 0.1 1 0.7]);
+% =========================================================================
+% ROUTED VIDEO WRITER ENGINE
+% =========================================================================
+video_filename = fullfile(export_dir, 'shoreline_tracking_animation.mp4');
+fprintf('Initializing Video Writer Engine: %s...\n', video_filename);
+
+v_writer = VideoWriter(video_filename, 'MPEG-4');
+v_writer.FrameRate = 2;  
+v_writer.Quality = 95;   
+open(v_writer);          
+
+% Build Fast-Update Interface Layout (Forced to absolute width to stabilize recording frames)
+fig = figure('Name', 'Interactive ROI Shoreline Tracking Dashboard', ...
+             'Units', 'pixels', 'Position', [100, 100, 1280, 720], ... 
+             'Color', 'white');                                        
 
 % Plotting relative change array instead of absolute range
 ax1 = subplot(1,2,1);
@@ -313,19 +389,28 @@ xlabel(ax1, 'Timeline [HH:MM:SS]');
 ylabel(ax1, 'Water Displacement [Meters] (+=Encroachment, -=Recession)');
 grid(ax1, 'on'); box(ax1, 'on');
 xlim(ax1, [datetime(start_time) datetime(end_time)]); 
-ylim(ax1, [-5 5]); % Centered around zero (tracks +/- 5 meters of shoreline shift)
-yline(ax1, 0, 'k--', 'LineWidth', 1.5); % Reference zero line
+ylim(ax1, [-5 5]); 
+yline(ax1, 0, 'k--', 'LineWidth', 1.5); 
 
 ax2 = subplot(1,2,2);
 plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, zeros(size(x_axis)), ylimits, xlimits, 'scatter');
 hold(ax2, 'on');
 h_radar_scatter = findobj(ax2, 'Type', 'Scatter');
-h_shoreline_scatter = scatter(ax2, NaN, NaN, 14, 'r', 'filled');
 
-% Draw the boundary of your user-selected ROI area as a reference ring
+% =========================================================================
+% VISUAL REFERENCE LAYER FOR LAND MASK & ROI
+% =========================================================================
 if exist('roi_vertices', 'var') && ~isempty(roi_vertices)
-    plot(ax2, roi_vertices(:,1), roi_vertices(:,2), 'r--', 'LineWidth', 1.5, 'DisplayName', 'Bound ROI');
+    plot(ax2, roi_vertices(:,1), roi_vertices(:,2), 'w--', 'LineWidth', 2, 'DisplayName', 'Bound ROI');
 end
+
+if exist('binary_land_mask', 'var') && ~isempty(binary_land_mask)
+    grid_land = griddata(x_axis, y_axis, double(binary_land_mask), XQ, YQ, 'nearest');
+    [~, h_contour] = contour(ax2, YQ, XQ, grid_land, [0.5 0.5], 'k-', 'LineWidth', 1.8);
+end
+
+h_shoreline_scatter = scatter(ax2, NaN, NaN, 16, 'r', 'filled');
+% =========================================================================
 
 colorbar(ax2); clim(ax2, [0.2, 0.8]); colormap(ax2, parula);
 title(ax2, 'Live Tracking View (Red Points = Active Water Interface)', 'FontSize', 12);
@@ -333,6 +418,10 @@ axis(ax2, 'equal'); box(ax2, 'on');
 h_sgtitle = sgtitle(fig, 'Initializing Relative Tracking Engine...', 'FontWeight', 'bold', 'FontSize', 14);
 
 %% 6. CHRONOLOGICAL PROCESSING LOOP & INTERACTIVE TRACKING
+baseline_points_idx = binary_land_mask & (global_coherence < coherence_water_threshold);
+baseline_x = x_axis(baseline_points_idx);
+baseline_y = y_axis(baseline_points_idx);
+
 while (current_start + window_duration) <= end_time
     current_end = current_start + window_duration;
     frame_idx = (timestamp_abs >= current_start) & (timestamp_abs <= current_end);
@@ -355,19 +444,15 @@ while (current_start + window_duration) <= end_time
     
     if any(water_encroachment_idx)
         tracked_shoreline_range(loop_count) = mean(pixel_ranges(water_encroachment_idx));
-    else
-        tracked_shoreline_range(loop_count) = max(pixel_ranges(active_tracking_mask));
     end
     
     % RELATIVE DISPLACEMENT CALCULATION ENGINE
     if isempty(baseline_range) && ~isnan(tracked_shoreline_range(loop_count))
-        % Establish the baseline range using the first valid calculated frame
         baseline_range = tracked_shoreline_range(loop_count);
         fprintf('--> Baseline Shoreline Range Established at: %.2f meters\n', baseline_range);
     end
     
     if ~isempty(baseline_range)
-        % Calculate relative displacement (+ means water advanced closer, - means retreated)
         relative_waterframe_shift(loop_count) = baseline_range - tracked_shoreline_range(loop_count);
     else
         relative_waterframe_shift(loop_count) = 0;
@@ -378,7 +463,6 @@ while (current_start + window_duration) <= end_time
     % --- RAPID RE-RENDERING UPDATES ---
     if ~ishandle(fig), break; end
     
-    % Update trend line using the relative data array
     set(h_trend, 'XData', time_axis(1:loop_count), 'YData', relative_waterframe_shift(1:loop_count));
     set(h_radar_scatter, 'CData', slice_coherence);
     
@@ -388,13 +472,23 @@ while (current_start + window_duration) <= end_time
         set(h_shoreline_scatter, 'XData', NaN, 'YData', NaN);
     end
     
-    % Dynamic title showing real-time displacement status
     set(h_sgtitle, 'String', sprintf('Processing Window: %s | Relative Shift: %+.2fm', ...
         datestr(current_start, 'HH:MM:SS'), relative_waterframe_shift(loop_count)));
     
-    drawnow limitrate;
-    pause(0.05); 
+    drawnow; 
+    
+    % =========================================================================
+    % CAPTURE AND WRITE STREAMING ANIMATION FRAME
+    % =========================================================================
+    current_frame = getframe(fig);         
+    writeVideo(v_writer, current_frame);   
     
     loop_count = loop_count + 1;
     current_start = current_start + step_duration;
 end
+
+% =========================================================================
+% DISCONNECT CHANNELS AND SAVE ASSEMBLED FILE
+% =========================================================================
+close(v_writer); 
+fprintf('=== Video successfully encoded and compiled inside export folder: %s ===\n', video_filename);

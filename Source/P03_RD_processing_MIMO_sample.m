@@ -53,23 +53,22 @@ clc
 addpath(genpath(fullfile(file_dir)));
 
 % 1. Define your projects in the list
-proj_list = {'MIMO_C77_Pond_lowSlope_21min_20260513_115401', ...
-             'MIMO_C77_Pond_lowSlope_21min_ohneCR_20260513_121908'}; 
+proj_list = {'MIMO_C77_GS_P3_001_15min_20260519_130316_00910000ms'}; 
          
 num_projects = length(proj_list); % Automatically counts how many projects are active
 
 % 2. Define your base configuration settings (Just ONE copy here)
-base_dist    = {1,10,50};       % Distance Limitation {True/False, D_Min, D_Max}
-base_azi     = {1,-20,20};      % Azimuth Limitation {True/False, Az_Min, Az_Max}
-base_asi     = {1,-inf};        % Filter by Amplitude Stability Index {True/False, ASI_Min}
+base_dist    = {1,1,180};       % Distance Limitation {True/False, D_Min, D_Max}
+base_azi     = {1,-50,50};      % Azimuth Limitation {True/False, Az_Min, Az_Max}
+base_asi     = {0,-inf};        % Filter by Amplitude Stability Index {True/False, ASI_Min}
 base_lr      = {1,-500,500};    % Cross Range Limitation {True/False, CR_Min, CR_Max}
-base_coh     = {1,0.7};         % Filter by Coherence {True/False, COH_Min}
+base_coh     = {1,-inf};         % Filter by Coherence {True/False, COH_Min}
 base_maxDisp = {1,-inf,inf};    % Filter by Maximum Displacement {True/False, dDNeg_max, dDPos_max}
-base_aoi     = {0,0,0};         % Filter by Area of Interest {True/False, Number of AoI, isCircle True/False}
+base_aoi     = {1,1,0};         % Filter by Area of Interest {True/False, Number of AoI, isCircle True/False}
 
 base_time        = {0, datetime(2026,04,23,11,03,54), datetime(2026,04,23,11,04,54)};
 base_time_zoom   = {0, datetime(2026,04,23,11,03,54), datetime(2026,04,23,11,04,24)};
-base_aoi_zoom    = {0,1,0};
+base_aoi_zoom    = {1,1,0};
 
 % 3. Automatically expand the lists to match the project count
 filt_by_dist_list    = cell(1, num_projects);

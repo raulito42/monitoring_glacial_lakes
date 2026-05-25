@@ -103,7 +103,6 @@
 % -------------------------------------------------------------------------
 % by Andreas Baumann-Ouyang, ETH Zürich (27th July 2022)
 
-
 function cascade_MIMO_02_slc2psi(path2proj,... 
     filt_by_rng, filt_by_lr,...
     filt_by_azi, filt_by_asi,...
@@ -149,9 +148,34 @@ function cascade_MIMO_02_slc2psi(path2proj,...
     data_hz_raw  = 1000 / frame_period;
     timestamp_abs = start_time + (0:num_frames_raw-1) * seconds(1/data_hz_raw);
 
-    % 5. Standard Radar Position (Fixed for your setup)
-    radar_position = [0, 0, 1.5]; 
-    radar_orient   = [91.4, -1.2, 90.000];
+    %% --- LOAD EXTERNAL GEOMETRY FILE ---
+    % Build the path to the parameter file folder inside the project directory
+    % Extract just the short project folder name from the absolute path
+    [~, proj_name, ~] = fileparts(path2proj); 
+
+    path_parm = fullfile(path2proj, '00_Parameter_Files');
+    config_filename = [proj_name, '.m']; % FIX: Changed path2proj to proj_name
+    path2config = fullfile(path_parm, config_filename);
+    
+    if isfile(path2config)
+        % Temporarily add the folder to the search path to run the script cleanly
+        [config_dir, config_name, ~] = fileparts(path2config);
+        addpath(config_dir);
+        try
+            run(config_name); % Executes project file to load radar_position and radar_orient
+            fprintf('Successfully loaded geometry from configuration file: %s\n', config_filename);
+        catch
+            warning('Error running configuration file %s. Using fallback geometry parameters.', config_filename);
+            radar_position = [0.0, 0.0, 1.5];
+            radar_orient   = [168.5943, 69.7854, 90.000];
+        end
+        rmpath(config_dir); % Remove it from the search path to keep the space clean
+    else
+        % Default fallback values if the script hasn't been created yet
+        warning('Geometry configuration file %s not found in %s. Using defaults.', config_filename, path_parm);
+        radar_position = [0.0, 0.0, 1.5];
+        radar_orient   = [168.5943, 69.7854, 90.000];
+    end
     %% --- END HIDDEN BLOCK ---
 
     [~,proj_name,~]= fileparts(path2proj);
@@ -193,18 +217,33 @@ function cascade_MIMO_02_slc2psi(path2proj,...
     scale_rad2mm = lambda / (4*pi) * 1000; % from radian to mm
     N_obs = 2*data_hz; % Average over first 2 seconds of observations and shift.
     
-    %% Temporal Filtering
+    %% Temporal Filtering & Downsampling (Fixed Logic)
+    stride_rate = 2; % Take every 10th frame (10Hz -> 1Hz)
+    
+    % Create a dedicated mask for the stride selection
+    stride_mask = false(size(timestamp_abs));
+    stride_mask(1:stride_rate:end) = true;
+    
     if filt_by_time{1} == 1
-        idx_keep = timestamp_abs >= min(filt_by_time{2:3}) & ...
-                   timestamp_abs <= max(filt_by_time{2:3});
+        % Find frames within the absolute time window
+        time_mask = timestamp_abs >= min(filt_by_time{2:3}) & ...
+                    timestamp_abs <= max(filt_by_time{2:3});
+        
+        % Keep only frames that fall inside the window AND match our stride
+        idx_keep = time_mask & stride_mask;
     else
-        idx_keep = ones(size(timestamp_abs));
+        % If no time filter is used, just use the stride mask directly
+        idx_keep = stride_mask;
     end
     idx_keep = logical(idx_keep);
     
     cplx = cplx(:,idx_keep);
     timestamp_abs = timestamp_abs(idx_keep);
     timestamp_rel = timestamp_rel(idx_keep);
+    
+    % --- ADD THIS LINE TO FIX METADATA ---
+    data_hz = data_hz / stride_rate; 
+    % -------------------------------------
     
     field_names = fields(coh);
     for field_i = 1:length(field_names)
@@ -340,11 +379,22 @@ function cascade_MIMO_02_slc2psi(path2proj,...
     %% Number of Scatter / Observations
     [n_sct,n_obs] = size(cplx);
        
+    % %% Interferograms
+    % step_i = step_i+1;
+    % fprintf("Step % 2d: Compute Interferograms\n",step_i); % Averaging 
+    % data.interf = complex(zeros(n_sct,n_obs-1));
+    % cplx_avg = mean(cplx(:,1:N_obs),2);
+    % for obs_i = 1:n_obs-1
+    %     data.interf(:,obs_i) = cplx(:,obs_i+1) .* conj(cplx_avg);
+    % end
     %% Interferograms
     step_i = step_i+1;
-    fprintf("Step % 2d: Compute Interferograms\n",step_i); % Averaging 
+    fprintf("Step % 2d: Compute Interferograms\n",step_i); 
     data.interf = complex(zeros(n_sct,n_obs-1));
-    cplx_avg = mean(cplx(:,1:N_obs),2);
+    
+    % FIX: Use only the first frame as reference, no averaging!
+    cplx_avg = cplx(:,1); 
+    
     for obs_i = 1:n_obs-1
         data.interf(:,obs_i) = cplx(:,obs_i+1) .* conj(cplx_avg);
     end
@@ -515,7 +565,7 @@ function cascade_MIMO_02_slc2psi(path2proj,...
     
     % --- NEW: Clear out the background noise floor manually ---
     % Find a cutoff value just above the arc background level
-    cutoff_noise = prctile(ampl, 35); 
+    cutoff_noise = prctile(ampl, 15); 
     ampl_clean = ampl;
     ampl_clean(ampl_clean < cutoff_noise) = cutoff_noise; 
     % ----------------------------------------------------------
@@ -567,7 +617,7 @@ function cascade_MIMO_02_slc2psi(path2proj,...
     max_abs_displ = max(abs(data.cumdispl(data.coh>=min([prc_tile_coh,0.95]),:)),[],1);
     idx_time_max = find(max_abs_displ==max(max_abs_displ));
     displace = squeeze(data.cumdispl(:,idx_time_max));
-    
+
     plot_polar_range_azimuth_2D_AB_preAX(data.y_axis,...
                                          data.x_axis,...
                                          displace,...
@@ -580,6 +630,7 @@ function cascade_MIMO_02_slc2psi(path2proj,...
     caxis(climits);
     box on
     axis equal
+
     
     Link = linkprop(ax,{'CameraUpVector', 'CameraPosition', 'CameraTarget', 'XLim', 'YLim'});
     setappdata(gcf, 'StoreTheLink', Link);
@@ -588,5 +639,3 @@ function cascade_MIMO_02_slc2psi(path2proj,...
     
     exportgraphics(fig,replace(path2mat,'.mat','.png'),'Resolution',600);
     savefig(fig,replace(path2mat,'.mat','.fig'));
-
-end

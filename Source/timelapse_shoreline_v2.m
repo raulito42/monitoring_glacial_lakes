@@ -1,8 +1,9 @@
+
 clear; clc; close all;
 % 1. Set paths
 [file_dir,~,~] = fileparts(matlab.desktop.editor.getActiveFilename);
 addpath(genpath(fullfile(file_dir)));
-name2proj = 'MIMO_C77_GS_P3_001_15min_20260519_130316_00910000ms';
+name2proj = 'MIMO_C77_GS_P2_001_20min_20260519_113033_01300000ms';
 path2proj = fullfile(file_dir, 'D00_sample_data', 'real', name2proj);
 fname = '01_SLC_Filt.mat';
 path2mat = fullfile(path2proj, '03_PSI_Interfero', fname);
@@ -66,22 +67,16 @@ else
     % Track true radial distance for every individual pixel
     pixel_ranges = sqrt(x_axis.^2 + y_axis.^2);
     
-    % --- NEW: LOGARITHMIC (dB) CONVERSION LAYER FOR AMPLITUDE ---
+    % --- LOGARITHMIC (dB) CONVERSION LAYER FOR AMPLITUDE ---
     global_amp_db = 20 * log10(global_mean_amp + eps);
     min_db = min(global_amp_db); max_db = max(global_amp_db);
     db_spread = max_db - min_db; if db_spread == 0, db_spread = eps; end
     global_amp_gamma = (global_amp_db - min_db) / db_spread;
     
-    % --- NEW: RANGE-COMPENSATED COHERENCE BOOST ---
-    % Create a smooth linear scaling ramp from 1.0 (at min range) up to 1.4 (at max range)
-    % This counteracts the drop-off in SNR without altering close-range water profiles
+    % --- RANGE-COMPENSATED COHERENCE BOOST ---
     range_ramp = 1.0 + 0.40 * ((pixel_ranges - min_range) / (max_range - min_range));
-    
-    % Apply the range ramp and clip at a strict ceiling of 1.0
     global_coherence_boosted = global_coherence .* range_ramp;
     global_coherence_boosted(global_coherence_boosted > 1) = 1;
-    
-    % Swap the working variable so the downstream 2D grid uses the boosted version
     global_coherence = global_coherence_boosted;
     
     % Store absolute raw baselines for diagnostic visual validation plots
@@ -92,8 +87,6 @@ else
     % RAW FEATURE 2D CONVOLUTION MEDIAN FILTER
     % =========================================================================
     fprintf('Projecting log-scaled features to padded 2D grid for median filtering...\n');
-    
-    % 1. Setup uniform 2D spatial grid with a 2-meter boundary buffer padding
     grid_res = 1; 
     grid_padding = 2.0; 
     
@@ -101,17 +94,14 @@ else
     yq = (min(y_axis) - grid_padding):grid_res:(max(y_axis) + grid_padding);
     [XQ, YQ] = meshgrid(xq, yq);
     
-    % 2. Interpolate raw vector features onto the padded 2D grid space
     grid_amp   = griddata(x_axis, y_axis, global_amp_gamma, XQ, YQ, 'linear');
     grid_pvar  = griddata(x_axis, y_axis, global_phase_var, XQ, YQ, 'linear');
     grid_coher = griddata(x_axis, y_axis, global_coherence, XQ, YQ, 'linear');
     
-    % Handle structural out-of-bounds NaN values safely far away from real boundaries
     grid_amp(isnan(grid_amp)) = 0;   
     grid_pvar(isnan(grid_pvar)) = max(global_phase_var);
     grid_coher(isnan(grid_coher)) = 0;
     
-    % 3. Apply Convolution Median Filtering
     filter_kernel = [5,5];
     se = strel('rectangle', [5,5]);
 
@@ -120,80 +110,87 @@ else
     grid_pvar_filtered  = medfilt2(grid_pvar, filter_kernel);
     grid_coher_filtered = medfilt2(grid_coher, filter_kernel);
     
-    % 4. Sample the smoothed 2D grid back down to original 1D data structures
     smooth_amp_gamma = interp2(XQ, YQ, grid_amp_filtered, x_axis, y_axis, 'linear');
     smooth_phase_var = interp2(XQ, YQ, grid_pvar_filtered, x_axis, y_axis, 'linear');
     smooth_coherence = interp2(XQ, YQ, grid_coher_filtered, x_axis, y_axis, 'linear');
     
-    % Final fallback protection layer
     smooth_amp_gamma(isnan(smooth_amp_gamma)) = 0; 
     smooth_phase_var(isnan(smooth_phase_var)) = max(global_phase_var); 
     smooth_coherence(isnan(smooth_coherence)) = 0;                     
     
-    % Reassign working variables to smoothed profiles for downstream K-means
     global_amp_gamma = smooth_amp_gamma;
     global_coherence = smooth_coherence;
 
     % =========================================================================
-    % VISUALIZATION 1: DUAL-CHANNEL PRE-CLUSTERING SIGNAL CONDITIONING DIAGNOSTICS
+    % VISUALIZATION 1: DUAL-CHANNEL PRE-CLUSTERING SIGNAL CONDITIONING DIAGNOSTICS (2x3 GRID)
     % =========================================================================
     filter_fig = figure('Name', 'Pre-Clustering Data Filtering Verification Workspace', ...
-                        'Units', 'centimeters', 'Position', [2, 2, 28, 24]); 
+                        'Units', 'centimeters', 'Position', [2, 2, 36, 18], ...
+                        'Color', 'w'); 
     ylim_p = [min(y_axis), max(y_axis)]; xlim_p = [min(x_axis), max(x_axis)];
     
-    % --- ROW 1: COHERENCE PROFILES ---
-    ax_f(1) = subplot(3,2,1);
+    % --- COLUMN 1: COHERENCE PROFILES ---
+    ax_f(1) = subplot(2,3,1); 
     plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, global_coherence_raw, ylim_p, xlim_p, 'scatter');
-    title('1A. Raw Coherence Profile (Noisy Input)', 'FontSize', 11, 'FontWeight', 'bold'); 
+    title('1A. Raw Coherence', 'FontSize', 11, 'FontWeight', 'bold', 'Color', 'k'); 
     colorbar; colormap(ax_f(1), jet); clim([0 1]); axis equal; grid on;
+    set(ax_f(1), 'Color', 'w', 'XColor', 'k', 'YColor', 'k', 'GridColor', 'k');
     
-    ax_f(2) = subplot(3,2,2);
+    ax_f(2) = subplot(2,3,4); 
     plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, global_coherence, ylim_p, xlim_p, 'scatter');
-    title('1B. Filtered Coherence (2D Median Smoothed)', 'FontSize', 11, 'FontWeight', 'bold'); 
+    title('1B. Filtered Coherence', 'FontSize', 11, 'FontWeight', 'bold', 'Color', 'k'); 
     colorbar; colormap(ax_f(2), jet); clim([0 1]); axis equal; grid on;
+    set(ax_f(2), 'Color', 'w', 'XColor', 'k', 'YColor', 'k', 'GridColor', 'k');
     
-    % --- ROW 2: AMPLITUDE PROFILES ---
-    ax_f(3) = subplot(3,2,3);
+    % --- COLUMN 2: AMPLITUDE PROFILES ---
+    ax_f(3) = subplot(2,3,2); 
     plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, global_amp_raw, ylim_p, xlim_p, 'scatter');
-    title('2A. Raw Normalized Amplitude (\gamma-Scaled)', 'FontSize', 11, 'FontWeight', 'bold'); 
-    colorbar; colormap(ax_f(3), hot); clim([0 max(global_amp_raw)*0.85]); axis equal; grid on;
+    title('2A. Raw Amplitude (\gamma)', 'FontSize', 11, 'FontWeight', 'bold', 'Color', 'k'); 
+    colorbar; colormap(ax_f(3), flipud(hot)); clim([0 max(global_amp_raw)*0.85]); axis equal; grid on; 
+    set(ax_f(3), 'Color', 'w', 'XColor', 'k', 'YColor', 'k', 'GridColor', 'k');
     
-    ax_f(4) = subplot(3,2,4);
+    ax_f(4) = subplot(2,3,5); 
     plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, global_amp_gamma, ylim_p, xlim_p, 'scatter');
-    title('2B. Filtered Amplitude (2D Max Convolution)', 'FontSize', 11, 'FontWeight', 'bold'); 
-    colorbar; colormap(ax_f(4), hot); clim([0 max(global_amp_raw)*0.85]); axis equal; grid on;
+    title('2B. Filtered Amplitude', 'FontSize', 11, 'FontWeight', 'bold', 'Color', 'k'); 
+    colorbar; colormap(ax_f(4), flipud(hot)); clim([0 max(global_amp_raw)*0.85]); axis equal; grid on;
+    set(ax_f(4), 'Color', 'w', 'XColor', 'k', 'YColor', 'k', 'GridColor', 'k');
 
-    % --- ROW 3: NEW: PHASE VARIANCE PROFILES ---
-    ax_f(5) = subplot(3,2,5);
+    % --- COLUMN 3: PHASE VARIANCE PROFILES ---
+    ax_f(5) = subplot(2,3,3); 
     plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, global_phase_var, ylim_p, xlim_p, 'scatter');
-    title('3A. Raw Phase Variance Profile (\sigma_\phi^2)', 'FontSize', 11, 'FontWeight', 'bold'); 
-    colorbar; colormap(ax_f(5), parula); clim([0 max(global_phase_var)*0.75]); axis equal; grid on;
+    title('3A. Raw Phase Variance (\sigma_\phi^2)', 'FontSize', 11, 'FontWeight', 'bold', 'Color', 'k'); 
+    colorbar; colormap(ax_f(5), bone); clim([0 max(global_phase_var)*0.75]); axis equal; grid on; 
+    set(ax_f(5), 'Color', 'w', 'XColor', 'k', 'YColor', 'k', 'GridColor', 'k');
     
-    ax_f(6) = subplot(3,2,6);
+    ax_f(6) = subplot(2,3,6); 
     plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, smooth_phase_var, ylim_p, xlim_p, 'scatter');
-    title('3B. Filtered Phase Variance (2D Median Smoothed)', 'FontSize', 11, 'FontWeight', 'bold'); 
-    colorbar; colormap(ax_f(6), parula); clim([0 max(global_phase_var)*0.75]); axis equal; grid on;
+    title('3B. Filtered Phase Variance', 'FontSize', 11, 'FontWeight', 'bold', 'Color', 'k'); 
+    colorbar; colormap(ax_f(6), bone); clim([0 max(global_phase_var)*0.75]); axis equal; grid on;
+    set(ax_f(6), 'Color', 'w', 'XColor', 'k', 'YColor', 'k', 'GridColor', 'k');
     
-    % Sync zooming and panning parameters across all 6 subplots
     linkprop(ax_f, {'XLim', 'YLim'});
     
-    sgtitle('Multi-Channel Pre-Clustering Signal Conditioning Diagnostics', ...
-            'FontSize', 14, 'FontWeight', 'bold', 'FontName', 'Helvetica');
+    sg_handle = sgtitle('Multi-Channel Pre-Clustering Signal Conditioning Diagnostics', ...
+            'FontSize', 14, 'FontWeight', 'bold', 'FontName', 'Helvetica', 'Color', 'k');
+        
+    % Separate subplots vertically from global title to avoid overlap collisions
+    for i = [1, 3, 5]
+        pos = ax_f(i).Position;
+        ax_f(i).Position = [pos(1), pos(2) - 0.03, pos(3), pos(4) - 0.01];
+    end
     drawnow;
 
     % =========================================================================
     % ROUTED HIGH-RESOLUTION PNG EXPORT
     % =========================================================================
     output_filename1 = fullfile(export_dir, 'signal_conditioning_analysis.png');
-    fprintf('Exporting full 6-panel matrix as a 300 DPI PNG to: %s\n', output_filename1);
-    
     filter_fig.Units = 'centimeters';
-    filter_fig.Position = [0, 0, 30, 36]; 
+    filter_fig.Position = [0, 0, 36, 20]; 
     
-    exportgraphics(filter_fig, output_filename1, 'Resolution', 300, 'BackgroundColor', 'none');               
-    fprintf('=== PNG Export Complete! ===\n');
+    exportgraphics(filter_fig, output_filename1, 'Resolution', 300, 'BackgroundColor', 'none');            
+    fprintf('=== Signal Conditioning Diagnostics Exported ===\n');
 
-    % 5. Execute 3-Class Weighted K-Means on the newly filtered features
+    % 5. Execute 3-Class Weighted K-Means
     fprintf('Running 3-Class Weighted K-Means on conditioned features...\n');
     base_features = zscore([smooth_amp_gamma, smooth_phase_var, smooth_coherence]);
     feature_weights = [0.5, 0.0, 2.2]; 
@@ -201,7 +198,6 @@ else
 
     global_clusters = kmeans(global_features_scaled, 3, 'Replicates', 15);
 
-    % Automatically sort indices from lowest coherence to highest coherence
     mean_coherence_per_cluster = zeros(3,1);
     for k = 1:3
         mean_coherence_per_cluster(k) = mean(global_coherence(global_clusters == k));
@@ -255,7 +251,6 @@ else
     unique_clusters = unique(spatial_clusters(valid_cluster_idx));
     cluster_sizes = histcounts(spatial_clusters(valid_cluster_idx), [unique_clusters; max(unique_clusters)+1]);
     
-    % --- NEW: KEEP ALL ROBUST CLUSTERS ---
     significant_cluster_mask = cluster_sizes > 15; 
     valid_land_clusters = unique_clusters(significant_cluster_mask);
     
@@ -276,48 +271,116 @@ binary_land_mask = inShape(shp, x_axis, y_axis);
 fprintf('Exporting finalized mask metrics to cache: %s\n', path_adjusted_cluster);
 
 %% 4.5 COMPARISON PLOT DISPLAY & INTERACTIVE ROI SELECTION
-fprintf('Generating comparison plots...\n');
+fprintf('Generating comparison plots for poster presentation...\n');
+
+% =========================================================================
+% FIGURE 1: SIDE-BY-SIDE MATRIX LAYOUT
+% =========================================================================
 comp_fig = figure('Name', 'Spatial Processing Comparison & ROI Selection', ...
-                  'units', 'normalized', 'outerposition', [0.1 0.3 0.8 0.5]);
+                  'units', 'normalized', 'outerposition', [0.1 0.1 0.8 0.8], ...
+                  'Color', 'w');
+
 comp_ylim = [min(y_axis), max(y_axis)] + [-1 1] * abs(diff([min(y_axis), max(y_axis)])) * 0.02;
 comp_xlim = [min(x_axis), max(x_axis)] + [-1 1] * abs(diff([min(y_axis), max(y_axis)])) * 0.02;
+
+% Shared Discrete Custom Map Palette [Open Water; Transition Zone; Stable Ground]
+poster_colormap = [0.15 0.35 0.65; 0.95 0.60 0.10; 0.75 0.15 0.15];
 
 % Subplot 1: 3-Class Unstructured Map
 ax_comp(1) = subplot(1, 2, 1);
 categorical_map = zeros(size(raw_sparse_land_mask));
 categorical_map(raw_transition_mask) = 1;
 categorical_map(raw_sparse_land_mask) = 2;
+
 plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, categorical_map, comp_ylim, comp_xlim, 'scatter');
-title('1. 3-Class Cleaned Mask (Pre-Filtered Core)', 'FontSize', 12, 'FontWeight', 'bold');
-h_cb1 = colorbar; h_cb1.Ticks = [0, 1, 2]; h_cb1.TickLabels = {'Open Water', 'Transition Zone', 'Stable Land'};
-colormap(ax_comp(1), [0.15 0.35 0.65; 0.95 0.60 0.10; 0.75 0.15 0.15]); clim([0, 2]); axis equal; box on; grid on;
+title('1. Pre-Filtered Core Mask', 'FontSize', 16, 'FontWeight', 'bold', 'Color', 'k');
+
+set(ax_comp(1), 'Color', 'w', 'XColor', 'k', 'YColor', 'k', 'GridColor', [0.3 0.3 0.3], ...
+                'FontSize', 14, 'LineWidth', 1.5);
+colormap(ax_comp(1), poster_colormap); clim([0, 2]); axis equal; box on; grid on;
 
 % Subplot 2: Solid Infilled Mask Layout 
 ax_comp(2) = subplot(1, 2, 2);
 infilled_3class_map = zeros(size(binary_land_mask));
 infilled_3class_map(raw_transition_mask) = 1;
 infilled_3class_map(binary_land_mask) = 2;
-plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, infilled_3class_map, comp_ylim, comp_xlim, 'scatter');
-title('2. Target Tracking ROI Configuration Space', 'FontSize', 12, 'FontWeight', 'bold');
-h_cb2 = colorbar; h_cb2.Ticks = [0, 1, 2]; h_cb2.TickLabels = {'Open Water', 'Transition Zone', 'Solid Ground Core'};
-colormap(ax_comp(2), [0.15 0.35 0.65; 0.95 0.60 0.10; 0.75 0.15 0.15]); clim([0, 2]); axis equal; box on; grid on;
 
+plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, infilled_3class_map, comp_ylim, comp_xlim, 'scatter');
+title('2. Target Tracking ROI Configuration', 'FontSize', 16, 'FontWeight', 'bold', 'Color', 'k');
+
+set(ax_comp(2), 'Color', 'w', 'XColor', 'k', 'YColor', 'k', 'GridColor', [0.3 0.3 0.3], ...
+                'FontSize', 14, 'LineWidth', 1.5);
+colormap(ax_comp(2), poster_colormap); clim([0, 2]); axis equal; box on; grid on;
+
+% Sync viewing windows
 linkproperties = linkprop(ax_comp, {'XLim', 'YLim'});
 setappdata(comp_fig, 'ComparisonLink', linkproperties);
-% sgtitle('3-Class Morphological Optimization & Region of Interest Selection', 'FontSize', 14, 'FontWeight', 'bold', 'FontName', 'Helvetica');
+
+% Shared right-aligned categorical colorbar for the dual-plot figure
+h_cb_shared = colorbar(ax_comp(2), 'Location', 'eastoutside');
+h_cb_shared.Color = 'k'; h_cb_shared.FontSize = 14; h_cb_shared.FontWeight = 'bold';
+h_cb_shared.Ticks = [0.33, 1.0, 1.66]; 
+h_cb_shared.TickLabels = {'Open Water', 'Transition Zone', 'Stable Land'};
+
+% Figure 1 Title Box Setup
+annotation(comp_fig, 'textbox', [0.1, 0.91, 0.8, 0.05], ...
+    'String', '3-Class Morphological Optimization & Region of Interest Selection', ...
+    'FontSize', 18, 'FontWeight', 'bold', 'FontName', 'Helvetica', 'Color', 'k', ...
+    'EdgeColor', 'none', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'middle');
+
+% Reposition subplots to clear title and align with colorbar
+for i = 1:2
+    pos = ax_comp(i).Position;
+    ax_comp(i).Position = [pos(1) - 0.02, pos(2) - 0.05, pos(3) - 0.02, pos(4) - 0.02];
+end
 drawnow;
 
-% =========================================================================
-% ROUTED HIGH-RESOLUTION PNG EXPORT
-% =========================================================================
+% Figure 1 Export
 output_filename2 = fullfile(export_dir, 'morphological_roi_selection.png');
-fprintf('Exporting side-by-side comparison matrix as a 300 DPI PNG to: %s\n', output_filename2);
-
+fprintf('Exporting side-by-side matrix PNG to: %s\n', output_filename2);
 comp_fig.Units = 'centimeters';
-comp_fig.Position = [0, 0, 30, 14]; 
-
+comp_fig.Position = [0, 0, 30, 22]; 
 exportgraphics(comp_fig, output_filename2, 'Resolution', 300, 'BackgroundColor', 'none');
-fprintf('=== ROI Comparison Export Complete! ===\n');
+
+
+% =========================================================================
+% FIGURE 2: STANDALONE ROI CONFIGURATION PLOT (ADDED UNDERNEATH)
+% =========================================================================
+fprintf('Generating standalone Target Tracking ROI plot...\n');
+
+roi_fig = figure('Name', 'MIMO-SAR Target Tracking ROI Configuration', ...
+                 'units', 'normalized', 'outerposition', [0.1 0.1 0.5 0.7], ...
+                 'Color', 'w');
+
+ax_roi = axes('Parent', roi_fig);
+
+% Re-plot tracking map data natively on isolated axis
+plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, infilled_3class_map, comp_ylim, comp_xlim, 'scatter');
+
+title('Target Tracking ROI Configuration Space', 'FontSize', 18, 'FontWeight', 'bold', 'Color', 'k');
+set(ax_roi, 'Color', 'w', 'XColor', 'k', 'YColor', 'k', 'GridColor', [0.3 0.3 0.3], ...
+            'FontSize', 14, 'LineWidth', 1.5);
+colormap(ax_roi, poster_colormap); clim([0, 2]); axis equal; box on; grid on;
+
+% Standalone Legend Configuration
+h_cb = colorbar(ax_roi, 'Location', 'eastoutside');
+h_cb.Color = 'k'; h_cb.FontSize = 14; h_cb.FontWeight = 'bold';
+h_cb.Ticks = [0.33, 1.0, 1.66]; 
+h_cb.TickLabels = {'Open Water', 'Transition Zone', 'Stable Land'};
+
+% Push left slightly to pad right-edge margin
+pos_roi = ax_roi.Position;
+ax_roi.Position = [pos_roi(1) - 0.03, pos_roi(2), pos_roi(3) - 0.02, pos_roi(4)];
+drawnow;
+
+% Figure 2 Export
+output_filename3 = fullfile(export_dir, 'standalone_roi_configuration.png');
+fprintf('Exporting standalone ROI PNG to: %s\n', output_filename3);
+roi_fig.Units = 'centimeters';
+roi_fig.Position = [0, 0, 22, 18]; 
+exportgraphics(roi_fig, output_filename3, 'Resolution', 300, 'BackgroundColor', 'none');
+
+fprintf('=== All MATLAB Poster Figure Exports Complete! ===\n');
 
 % --- INTERACTIVE ROI DRAWING STEP ---
 fprintf('\n[ACTION REQUIRED]: Click vertices on Subplot 2 to draw an ROI polygon.\n');
@@ -350,7 +413,7 @@ step_duration = seconds(15);
 start_time = timestamp_abs(1);
 end_time = timestamp_abs(end);
 
-ylimits = [min(y_axis), max(y_axis)] + [-1 1] * abs(diff([min(y_axis), max(y_axis)])) * 0.02;
+ylimites = [min(y_axis), max(y_axis)] + [-1 1] * abs(diff([min(y_axis), max(y_axis)])) * 0.02;
 xlimits = [min(x_axis), max(x_axis)] + [-1 1] * abs(diff([min(y_axis), max(y_axis)])) * 0.02;
 
 current_start = start_time;
@@ -376,52 +439,58 @@ v_writer.FrameRate = 2;
 v_writer.Quality = 95;   
 open(v_writer);          
 
-% Build Fast-Update Interface Layout (Forced to absolute width to stabilize recording frames)
+% Build Fast-Update Interface Layout (Forced to absolute width)
 fig = figure('Name', 'Interactive ROI Shoreline Tracking Dashboard', ...
              'Units', 'pixels', 'Position', [100, 100, 1280, 720], ... 
-             'Color', 'white');                                        
+             'Color', 'w');                                        
 
 % Plotting relative change array instead of absolute range
 ax1 = subplot(1,2,1);
 h_trend = plot(ax1, NaT, NaN, '-o', 'LineWidth', 2.5, 'Color', [0.85 0.33 0.1], 'MarkerSize', 5, 'MarkerFaceColor', [0.5 0.1 0]);
-title(ax1, 'Relative Waterline Displacement (\Delta Level)', 'FontSize', 12);
-xlabel(ax1, 'Timeline [HH:MM:SS]'); 
-ylabel(ax1, 'Water Displacement [Meters] (+=Encroachment, -=Recession)');
+title(ax1, 'Relative Waterline Displacement (\Delta Level)', 'FontSize', 12, 'Color', 'k');
+xlabel(ax1, 'Timeline [HH:MM:SS]', 'Color', 'k'); 
+ylabel(ax1, 'Water Displacement [Meters] (+=Encroachment, -=Recession)', 'Color', 'k');
 grid(ax1, 'on'); box(ax1, 'on');
+set(ax1, 'Color', 'w', 'XColor', 'k', 'YColor', 'k', 'GridColor', [0.7 0.7 0.7]);
 xlim(ax1, [datetime(start_time) datetime(end_time)]); 
 ylim(ax1, [-5 5]); 
 yline(ax1, 0, 'k--', 'LineWidth', 1.5); 
 
 ax2 = subplot(1,2,2);
-plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, zeros(size(x_axis)), ylimits, xlimits, 'scatter');
+plot_polar_range_azimuth_2D_AB_preAX(y_axis, x_axis, zeros(size(x_axis)), ylimites, xlimits, 'scatter');
 hold(ax2, 'on');
 h_radar_scatter = findobj(ax2, 'Type', 'Scatter');
+set(ax2, 'Color', 'w', 'XColor', 'k', 'YColor', 'k', 'GridColor', [0.7 0.7 0.7]);
 
 % =========================================================================
 % VISUAL REFERENCE LAYER FOR LAND MASK & ROI
 % =========================================================================
 if exist('roi_vertices', 'var') && ~isempty(roi_vertices)
-    plot(ax2, roi_vertices(:,1), roi_vertices(:,2), 'w--', 'LineWidth', 2, 'DisplayName', 'Bound ROI');
+    plot(ax2, roi_vertices(:,1), roi_vertices(:,2), 'k--', 'LineWidth', 2, 'DisplayName', 'Bound ROI');
 end
 
+% Extract structural elements of the baseline boundary for horizontal calculations
+base_edge_x = []; base_edge_y = [];
 if exist('binary_land_mask', 'var') && ~isempty(binary_land_mask)
     grid_land = griddata(x_axis, y_axis, double(binary_land_mask), XQ, YQ, 'nearest');
-    [~, h_contour] = contour(ax2, YQ, XQ, grid_land, [0.5 0.5], 'k-', 'LineWidth', 1.8);
+    [c_mat, h_contour] = contour(ax2, YQ, XQ, grid_land, [0.5 0.5], 'k-', 'LineWidth', 1.8);
+    
+    % Store baseline coordinate arrays for tracking
+    if ~isempty(c_mat)
+        base_edge_x = c_mat(2, 2:end)';
+        base_edge_y = c_mat(1, 2:end)';
+    end
 end
 
 h_shoreline_scatter = scatter(ax2, NaN, NaN, 16, 'r', 'filled');
 % =========================================================================
 
-colorbar(ax2); clim(ax2, [0.2, 0.8]); colormap(ax2, parula);
-title(ax2, 'Live Tracking View (Red Points = Active Water Interface)', 'FontSize', 12);
+h_cb3 = colorbar(ax2); clim(ax2, [0.2, 0.8]); colormap(ax2, jet); h_cb3.Color = 'k'; % Using version-proof 'jet'
+title(ax2, 'Live Tracking View (Red Points = Active Water Interface)', 'FontSize', 12, 'Color', 'k');
 axis(ax2, 'equal'); box(ax2, 'on');
-h_sgtitle = sgtitle(fig, 'Initializing Relative Tracking Engine...', 'FontWeight', 'bold', 'FontSize', 14);
+h_sgtitle = sgtitle(fig, 'Initializing Relative Tracking Engine...', 'FontWeight', 'bold', 'FontSize', 14, 'Color', 'k');
 
 %% 6. CHRONOLOGICAL PROCESSING LOOP & INTERACTIVE TRACKING
-baseline_points_idx = binary_land_mask & (global_coherence < coherence_water_threshold);
-baseline_x = x_axis(baseline_points_idx);
-baseline_y = y_axis(baseline_points_idx);
-
 while (current_start + window_duration) <= end_time
     current_end = current_start + window_duration;
     frame_idx = (timestamp_abs >= current_start) & (timestamp_abs <= current_end);
@@ -437,13 +506,35 @@ while (current_start + window_duration) <= end_time
     slice_interf_phase = angle(cplx_slice .* conj(cplx_ref));
     slice_coherence = abs(mean(exp(1i * slice_interf_phase), 2));
     
-    pixel_ranges = sqrt(x_axis.^2 + y_axis.^2);
-    
     active_tracking_mask = binary_land_mask & roi_spatial_mask;
     water_encroachment_idx = active_tracking_mask & (slice_coherence < coherence_water_threshold);
     
-    if any(water_encroachment_idx)
-        tracked_shoreline_range(loop_count) = mean(pixel_ranges(water_encroachment_idx));
+    % =========================================================================
+    % ACCURATE HORIZONTAL SHORELINE DISTANCE CALCULATION ENGINE
+    % =========================================================================
+    if any(water_encroachment_idx) && ~isempty(base_edge_x)
+        current_x = x_axis(water_encroachment_idx);
+        current_y = y_axis(water_encroachment_idx);
+        
+        horizontal_distances = zeros(size(current_x));
+        for p = 1:length(current_x)
+            % 1. Find baseline points that match the vertical height (Y)
+            y_tolerance = 1.0; 
+            matching_y_idx = abs(base_edge_y - current_y(p)) <= y_tolerance;
+            
+            if any(matching_y_idx)
+                % 2. Calculate horizontal separation metrics (X-distance)
+                horizontal_distances(p) = mean(current_x(p) - base_edge_x(matching_y_idx));
+            else
+                % Backup 2D vector fallback logic
+                horizontal_distances(p) = min(sqrt((current_x(p) - base_edge_x).^2 + (current_y(p) - base_edge_y).^2));
+            end
+        end
+        
+        % Store the global mean horizontal shift in meters across the pond
+        tracked_shoreline_range(loop_count) = mean(horizontal_distances);
+    else
+        tracked_shoreline_range(loop_count) = NaN;
     end
     
     % RELATIVE DISPLACEMENT CALCULATION ENGINE
@@ -452,7 +543,7 @@ while (current_start + window_duration) <= end_time
         fprintf('--> Baseline Shoreline Range Established at: %.2f meters\n', baseline_range);
     end
     
-    if ~isempty(baseline_range)
+    if ~isempty(baseline_range) && ~isnan(tracked_shoreline_range(loop_count))
         relative_waterframe_shift(loop_count) = baseline_range - tracked_shoreline_range(loop_count);
     else
         relative_waterframe_shift(loop_count) = 0;
@@ -488,7 +579,19 @@ while (current_start + window_duration) <= end_time
 end
 
 % =========================================================================
-% DISCONNECT CHANNELS AND SAVE ASSEMBLED FILE
+% DISCONNECT CHANNELS AND EXPORT SNAPSHOT
 % =========================================================================
 close(v_writer); 
 fprintf('=== Video successfully encoded and compiled inside export folder: %s ===\n', video_filename);
+
+% Ensure the figure handle is still active before attempting to export
+if ishandle(fig)
+    final_frame_filename = fullfile(export_dir, 'final_shoreline_displacement_trend.png');
+    fprintf('Exporting final timeline snapshot to: %s\n', final_frame_filename);
+    
+    drawnow;
+    exportgraphics(fig, final_frame_filename, 'Resolution', 300, 'BackgroundColor', 'none');
+    fprintf('=== Final displacement snapshot successfully exported! ===\n');
+else
+    warning('Figure handle was closed before the final tracking frame could be saved.');
+end

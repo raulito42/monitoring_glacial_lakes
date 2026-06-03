@@ -86,8 +86,6 @@ function [path2ts] = cascade_MIMO_03_psi2timeseries(path2proj,time_select,filt_b
     dxyz = sqrt(data_ts.dX_North.^2 + ...
                 data_ts.dY_East.^2 + ...
                 data_ts.dZ_Height.^2);
-
-    %dxy = sqrt(data_ts.dX_North.^2 + data_ts.dY_East.^2);
     
     scale_displ = 1;
     data_ts.dX_North_displ = -data_ts.dX_North ./ dxyz .* data_ts.los_displ * scale_displ;
@@ -147,53 +145,89 @@ function [path2ts] = cascade_MIMO_03_psi2timeseries(path2proj,time_select,filt_b
     sp_mat = reshape([1:N_col*create_aoi],N_col,[])';
     sp_aoi = 2;
     
-    theta = data.radar.orientation(2)*pi/180;%data.radar.orientation(2)*pi/180;
+    theta = data.radar.orientation(2)*pi/180;
     R = [cos(theta) sin(theta); -sin(theta) cos(theta)];
     coord = R * [data.y_axis,data.x_axis]';
     y_rot = coord(1,:)';
     x_rot = coord(2,:)';
     
-    %% Overview Interferogram
+    %% Calculate Time Step Properties Safely
+    time_diff = data.time_rel_interf(2) - data.time_rel_interf(1);
+    time_str = char(time_diff);
+    time_numeric = sscanf(time_str, '%*d:%*d:%f');
+    if isempty(time_numeric) || time_numeric == 0
+        time_numeric = double(time_diff);
+    end
+    
+    %% Overview Interferogram Map Generation
+    % sp_id = sp_mat(:,1:sp_aoi-1);
+    % ax(1) = subplot(create_aoi,N_col,sp_id(:));
+    % hold on 
+    % data_map = log10(mean(data.ampl,2));
+    % ylimits_map = [min(y_rot),max(y_rot)];
+    % ylimits_map = ylimits_map + diff(ylimits_map)*0.1*[-1 1];
+    % xlimits_map = [min(x_rot),max(x_rot)];
+    % xlimits_map = xlimits_map + diff(xlimits_map)*0.1*[-1 1];
+    % plot_polar_range_azimuth_2D_AB_preAX(y_rot,x_rot,data_map,ylimits_map,xlimits_map,'scatter');
+    % box on
+    % grid on
+    % title('Amplitude [log10(A)]');
+    % 
+    % clim(ax(1), [3.75, 3.90]);
+%% Overview Map Generation: Low-Coherence Tracking
     sp_id = sp_mat(:,1:sp_aoi-1);
     ax(1) = subplot(create_aoi,N_col,sp_id(:));
     hold on 
-    data_map = log10(mean(data.ampl,2));
+    
+    data_map = mean(data.coh, 2); 
+    
     ylimits_map = [min(y_rot),max(y_rot)];
     ylimits_map = ylimits_map + diff(ylimits_map)*0.1*[-1 1];
     xlimits_map = [min(x_rot),max(x_rot)];
     xlimits_map = xlimits_map + diff(xlimits_map)*0.1*[-1 1];
+    
     plot_polar_range_azimuth_2D_AB_preAX(y_rot,x_rot,data_map,ylimits_map,xlimits_map,'scatter');
     box on
     grid on
-    title('Amplitude [log10(A)]');
+    title('Short-Term Spatial Coherence [0-1]');
     
+    % Shift limits down since your scene coherence sits below 0.65
+    clim(ax(1), [0.1, 0.45]); 
+    colormap(ax(1), 'jet');
+    
+    %% Plotting Data For Each Selected AOI
     for aoi_i = 1:create_aoi
         sp_id = sp_mat(aoi_i,sp_aoi:end);
         ax(aoi_i+1) = subplot(create_aoi,N_col,sp_id(:));
         hold on
         idx{aoi_i,1} = get_idx_in_aoi(data.y_axis,...
-                             data.x_axis,...
-                             {aoi{aoi_i}});
+                                     data.x_axis,...
+                                     {aoi{aoi_i}});
         data_aoiX = data_visX(idx{aoi_i},:);
-        [N_bin,N_time] = size(data_aoiX);
-        data_aoiX_mean = mean(data_aoiX,1);
+        
+        if ~isempty(data_aoiX) && ~all(isnan(data_aoiX(:)))
+            [N_bin,N_time] = size(data_aoiX);
+            data_aoiX_mean = mean(data_aoiX,1);
 
-        data_aoiY = data_visY(idx{aoi_i},:);
-        data_aoiY_mean = mean(data_aoiY,1);
+            data_aoiY = data_visY(idx{aoi_i},:);
+            data_aoiY_mean = mean(data_aoiY,1);
 
-        data_aoiZ = data_visZ(idx{aoi_i},:);
-        data_aoiZ_mean = mean(data_aoiZ,1);
-
-        N_Hz_is = 1/seconds(data.time_rel_interf(2)-data.time_rel_interf(1));
-        N_skip = round(N_Hz_is/N_Hz_plt);
-        for bin_i = 1:N_bin
-            plot(data_time(1:N_skip:end),data_aoiX(bin_i,1:N_skip:end),'HandleVisibility','off');
+            N_Hz_is = 1 / time_numeric; 
+            N_skip = round(N_Hz_is/N_Hz_plt);
+            if N_skip < 1, N_skip = 1; end
+            
+            for bin_i = 1:N_bin
+                plot(data_time(1:N_skip:end),data_aoiX(bin_i,1:N_skip:end),'HandleVisibility','off');
+            end
+            plot(data_time(1:N_skip:end),data_aoiX_mean(:,1:N_skip:end),'b','LineWidth',3,'DisplayName','Displacement to North');
+            plot(data_time(1:N_skip:end),data_aoiY_mean(:,1:N_skip:end),'r','LineWidth',3,'DisplayName','Displacement to East');
+            
+            % Update axis limits based on valid plotted trends
+            ylimits_val = [min([min(ylim),ylimits_val(1)]), max([max(ylim),ylimits_val(2)])]; 
+        else
+            text(0.5, 0.5, 'No Active Scatterers inside this patch!', 'HorizontalAlignment', 'center', 'FontSize', 12, 'Color', 'r');
         end
-        plot(data_time(1:N_skip:end),data_aoiX_mean(:,1:N_skip:end),'b','LineWidth',3,'DisplayName','Displacement to North');
-        plot(data_time(1:N_skip:end),data_aoiY_mean(:,1:N_skip:end),'r','LineWidth',3,'DisplayName','Displacement to East');
-        %plot(data_time(1:N_skip:end),data_aoiZ_mean(:,1:N_skip:end),'g','LineWidth',3,'DisplayName','Displacement to Height');
 
-        ylimits_val = [min([min(ylim),ylimits_val(1)]),max([max(ylim),ylimits_val(2)])]; 
         title(desc{aoi_i});
         if aoi_i == create_aoi
             legend('Location','best');
@@ -204,22 +238,26 @@ function [path2ts] = cascade_MIMO_03_psi2timeseries(path2proj,time_select,filt_b
         aoi_rot{aoi_i,1} = coord2';
         pgon = polyshape(coord2(1,:),coord2(2,:));
         plot(pgon,'FaceColor','none','EdgeColor','y');
-
     end
     
     set(ax(1),'Color','k')
+    
+    % Hard-override validation check to handle empty matrices
+    if ~exist('ylimits_val','var') || isempty(ylimits_val) || any(isnan(ylimits_val)) || any(isinf(ylimits_val)) || ylimits_val(1) >= ylimits_val(2)
+        ylimits_val = [-5, 5]; 
+    end
     
     for aoi_i = 1:create_aoi
         set(ax(aoi_i+1),...
             'YLim',ylimits_val,...
             'Box','on',...
             'XLim',[min(data_time),max(data_time)]);
-         yline(ax(aoi_i+1),0,...
+        yline(ax(aoi_i+1),0,...
                'LineWidth',1,...
                'LineStyle','--',...
                'HandleVisibility','off');
     end
-    
+
     Link = linkprop(ax(2:end),{'CameraUpVector', 'CameraPosition', 'CameraTarget', 'XLim', 'YLim'});
     setappdata(gcf, 'StoreTheLink', Link);
     sgtitle('Projected Displacements [mm]');
@@ -241,4 +279,3 @@ function [path2ts] = cascade_MIMO_03_psi2timeseries(path2proj,time_select,filt_b
     
     save(replace(path2fig,'.png','.mat'),'data_ts','data_aoi');
 end
-

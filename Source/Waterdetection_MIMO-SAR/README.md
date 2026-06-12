@@ -1,8 +1,6 @@
 # Waterdetection
 
-This folder contains the main radar-based water detection pipeline for the `monitoring_glacial_lakes` project. The pipeline is organized into a sequence of MATLAB scripts that prepare radar data, extract stable land masks, detect shoreline change, and evaluate water area dynamics.
-
-> This README covers the core pipeline only. The `plots_report/` subfolder is intentionally excluded.
+This folder contains the main radar-based water detection pipeline for the `monitoring_glacial_lakes` project. The pipeline is organized into a sequence of MATLAB scripts that prepare radar data (from agbaumann/MIMO-SAR GitHub repository), extract stable land masks, detect shoreline change, and evaluate water area dynamics.
 
 ## Structure
 

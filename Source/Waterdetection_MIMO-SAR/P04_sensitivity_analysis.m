@@ -391,37 +391,6 @@ function P04_sensitivity_analysis(config)
     end
     
     % =========================================================================
-    % TEXT REPORT EXPORT ENGINE 2: RAW MATRIX CURVES TRACE
-    % =========================================================================
-    curve_txt_filename = fullfile(sensitivity_export_dir, 'sensitivity_sweep_curves.txt');
-    fid_curves = fopen(curve_txt_filename, 'w');
-    if fid_curves ~= -1
-        fprintf(fid_curves, '=========================================================================================================================================\n');
-        fprintf(fid_curves, 'DETAILED SENSITIVITY SWEEP AREA CURVES TIME-SERIES RAW MATRIX DATA\n');
-        fprintf(fid_curves, 'Project Reference: %s | Values represent Relative Delta Area Devs (m^2) relative to Frame 1\n', name2proj);
-        fprintf(fid_curves, '=========================================================================================================================================\n');
-        
-        fprintf(fid_curves, '%-7s   %-14s %-14s %-14s   %-14s %-14s %-14s   %-14s %-14s %-14s   %-14s %-14s %-14s\n', ...
-            'Frame#', ...
-            sprintf('NomFix_G%.2f', fixed_sweeps_nom(1)), sprintf('NomFix_G%.2f', fixed_sweeps_nom(2)), sprintf('NomFix_G%.2f', fixed_sweeps_nom(3)), ...
-            sprintf('DetFix_G%.2f', fixed_sweeps_det(1)), sprintf('DetFix_G%.2f', fixed_sweeps_det(2)), sprintf('DetFix_G%.2f', fixed_sweeps_det(3)), ...
-            sprintf('NomAdp_W%d', kmeans_windows(1)),   sprintf('NomAdp_W%d', kmeans_windows(2)),   sprintf('NomAdp_W%d', kmeans_windows(3)), ...
-            sprintf('DetAdp_W%d', kmeans_windows(1)),   sprintf('DetAdp_W%d', kmeans_windows(2)),   sprintf('DetAdp_W%d', kmeans_windows(3)));
-        fprintf(fid_curves, '----------------------------------------------------------------------------------------------------------------------------------------=\n');
-        
-        for f = 1:num_frames
-            fprintf(fid_curves, '%-7d   %14.2f %14.2f %14.2f   %14.2f %14.2f %14.2f   %14.2f %14.2f %14.2f   %14.2f %14.2f %14.2f\n', ...
-                f, ...
-                curves_fixed_nom(f,1),  curves_fixed_nom(f,2),  curves_fixed_nom(f,3), ...
-                curves_fixed_det(f,1),  curves_fixed_det(f,2),  curves_fixed_det(f,3), ...
-                curves_kmeans_nom(f,1), curves_kmeans_nom(f,2), curves_kmeans_nom(f,3), ...
-                curves_kmeans_det(f,1), curves_kmeans_det(f,2), curves_kmeans_det(f,3));
-        end
-        fprintf(fid_curves, '=========================================================================================================================================\n');
-        fclose(fid_curves);
-    end
-    
-    % =========================================================================
     % SAVE DATA PROFILES (Includes all preallocated transition structures and W_net arrays)
     % =========================================================================
     path_sensitivity_data = fullfile(sensitivity_export_dir, 'sensitivity_sweep_curves.mat');

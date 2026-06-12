@@ -84,5 +84,5 @@ If you only want to run a single step, call the corresponding function with a co
 ## Requirements
 
 - MATLAB
-- Image Processing Toolbox (for `strel`, `imclose`, `imopen`, `bwareaopen`)
-- Statistics Toolbox (for `kmeans`)
+- Image Processing Toolbox (for `strel`, `imclose`, `imopen`, `bwareaopen`, `imerode`)
+- Statistics Toolbox and Machine Learning Toolbox (for `kmeans`, `zscore`, `statset`)

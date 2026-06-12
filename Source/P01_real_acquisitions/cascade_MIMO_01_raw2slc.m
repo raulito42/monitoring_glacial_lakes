@@ -634,6 +634,7 @@
 % -------------------------------------------------------------------------
 % by Andreas Baumann-Ouyang, ETH Zürich (26th July 2022)
 
+%{
 function [] = cascade_MIMO_01_raw2slc(path2proj,filt_by_dist,filt_by_azi,filt_by_asi)
 
     save_static_only = 1;     % Save only static data
@@ -1093,4 +1094,416 @@ function [] = cascade_MIMO_01_raw2slc(path2proj,filt_by_dist,filt_by_azi,filt_by
     end
 
     ID = ID + 1;
+end
+%}
+
+function [] = cascade_MIMO_01_raw2slc(path2proj,filt_by_dist,filt_by_azi,filt_by_asi)
+    save_static_only = 1;     % Save only static data
+    dataPlatform = 'TDA2';
+    [~,proj_name,~]= fileparts(path2proj);
+    path_parm = fullfile(path2proj,'00_Parameter_Files'); % Path to Processing Settings
+    path_calib = fullfile(path_parm,'phaseMismatchCalibration.mat'); % Path to calibration file, for each board and chirp setting unique (!)
+    path_param = char(fullfile(path_parm,'module_param_1Chirp.m')); % Path to parameter file for the 1 chirp configuration
+    path_in = fullfile(path2proj,'01_Raw_Radar_Data'); % Input Path to Raw Data
+    path_out = fullfile(path2proj,'02_SLC_Radar_Data'); % Output Path to SLC Data
+    if ~isfolder(path_out)
+        mkdir(path_out);
+    end
+    if ~isfolder(path_parm)
+        mkdir(path_parm);
+    end
+    %% Start Processing
+    step_i = 1; % Numbering for command window message
+    fprintf('Step %02d: Process Radar Data (%s)\n', step_i, proj_name);
+    %% Create List of Input Files and Store as TXT
+    input_data_list = fullfile(path_parm,"Input_Data.txt");
+    fidList = fopen(input_data_list,'w');
+    path_files = char([path_in,filesep]);
+    fprintf(fidList, "%s\n",path_files);
+    fprintf(fidList, "%s\n",path_calib);
+    fprintf(fidList, "%s\n",path_param);
+    ID = 1;
+    %% Parameter File
+    para_name = sprintf('parameters_%02d.m',ID);
+    pathGenParaFile = fullfile(path_parm,para_name);
+    fid = fopen(pathGenParaFile,"w");
+    clear(pathGenParaFile);
+    %generate parameter file
+    parameter_file_gen_json(path_files, ...
+                            path_calib, ...
+                            path_param, ...
+                            pathGenParaFile, ...
+                            dataPlatform);
+    %load calibration parameters
+    load(path_calib);
+    % simTopObj is used for top level parameter parsing and data 
+    % loading and saving
+    simTopObj           = simTopCascade('pfile', pathGenParaFile);
+    calibrationObj      = calibrationCascade(...
+                                'pfile', pathGenParaFile, ...
+                                'calibrationfilePath', path_calib);
+    detectionObj        = CFAR_CASO('pfile', pathGenParaFile);
+    totNumFrames        = simTopObj.totNumFrames;
+    rangeBinSize        = detectionObj.rangeBinSize;
+    antenna_azimuthonly = detectionObj.antenna_azimuthonly;
+    frameCountGlobal    = 0;
+    totalFramesPrior    = 0;
+    % Get Unique File Idxs in the "dataFolder_test"   
+    [fileIdx_unique]    = getUniqueFileIdx(path_files);
+    t0 = tic;
+    fclose(fid);
+    % --- CONFIGURATION FOR 3-MIN WARMUP DRIFT ---
+    stepSize = 1; % Process at full native rate
+    % Use MATLAB's built-in native JSON decoder for 100% stability
+    f_json = dir(fullfile(path2proj, '01_Raw_Radar_Data', '*.mmwave.json'));
+    if isempty(f_json)
+        error('JSON config not found in %s', path2proj);
+    end
+    p = JsonParser(fullfile(f_json(1).folder, f_json(1).name));
+    % Read and decode the JSON parameters directly
+    frame_period = p.DevConfig(1).FrameConfig.Periodicity;
+    num_frames_raw   = p.DevConfig(1).FrameConfig.NumFrames;
+    % Standardize variable capitalization to 'frameRate'
+    frameRate = 1000 / frame_period; 
+    % Print tracking confirmation to the command window
+    fprintf('Radar capture profile detected: Periodicity = %.1f ms (Dynamic Framerate = %.2f Hz)\n', ...
+            frame_period, frameRate);
+    warmupDurationSec = 0 * 60;                      % 3 minutes warmup period
+    warmupFramesRaw = ceil(warmupDurationSec * frameRate); % Dynamically scales frames to discard!
+    fprintf('Variable Warmup Frames To Drop: %d\n', warmupFramesRaw);
+    absoluteRawFrameCounter = 0;                   % Tracks global timeline position
+    savedFileCounter = 0;                          % FIXED: Tracks written output indices sequentially (starts at 1)
+    
+    % =========================================================================
+    % MEMORY CAP LIMIT CONSTRAINTS (SUB-CHUNKING)
+    % =========================================================================
+    maxFramesInRAM = 1000; % Limits memory footprint per save block to ~1.0 GB
+    
+    for i_file = 1:(length(fileIdx_unique))
+        % Get File Names for the Master, Slave1, Slave2, Slave3   
+        [fileNameStruct]= getBinFileNames_withIdx(path_files, fileIdx_unique{i_file});        
+        calibrationObj.binfilePath = fileNameStruct;
+        [numValidFrames, ~] = getValidNumFrames(fullfile(path_files, fileNameStruct.masterIdxFile));
+        if i_file == 1 
+            startValidFrame = 2; % Skip the first frame due to TDA2 warm initialization
+        else
+            startValidFrame = 1;
+        end
+        step_i = step_i + 1;
+        
+        % Initialize variable state tracking arrays for sub-chunk execution
+        frameList = startValidFrame:stepSize:numValidFrames;
+        totalFramesInFile = length(frameList);
+        
+        % Determine framing indices inside loop structures
+        subChunkStartIdx = 1;
+        
+        while subChunkStartIdx <= totalFramesInFile
+            processedOutputCounter = 0;
+            subChunkEndIdx = min(subChunkStartIdx + maxFramesInRAM - 1, totalFramesInFile);
+            currentSubChunkFrames = frameList(subChunkStartIdx:subChunkEndIdx);
+            
+            % Predict how many active non-warmup frames fall inside this block
+            predictedActiveFrames = 0;
+            for f_check = 1:length(currentSubChunkFrames)
+                tempGlobalCounter = totalFramesPrior + currentSubChunkFrames(f_check);
+                if tempGlobalCounter > warmupFramesRaw
+                    predictedActiveFrames = predictedActiveFrames + 1;
+                end
+            end
+            
+            complex_data_static = []; % Clear tracking matrices from previous loops
+            
+            for f_idx = 1:length(currentSubChunkFrames)
+                frameIdx = currentSubChunkFrames(f_idx);
+                absoluteRawFrameCounter = totalFramesPrior + frameIdx;
+                
+                % DISCARD WARMUP PHASE
+                if absoluteRawFrameCounter <= warmupFramesRaw
+                    if mod(absoluteRawFrameCounter, 300) == 0 || absoluteRawFrameCounter == warmupFramesRaw
+                        fprintf('Step %02d: Skipping Warmup Phase... (Raw Frame %d/%d)\n', step_i, absoluteRawFrameCounter, warmupFramesRaw);
+                    end
+                    continue; 
+                end
+                
+                % --- PROCESS ACTIVE SAMPLES ---
+                processedOutputCounter = processedOutputCounter + 1;
+                calibrationObj.frameIdx = frameIdx;
+                adcData = datapath(calibrationObj);
+                adcData = adcData(:,:,calibrationObj.RxForMIMOProcess,:);            
+                filt_type = 'hanning';
+                numAngles = 256;
+                [complex_data_static_tmp,...
+                 ~,...
+                 x_axis_raw,...
+                 y_axis_raw] = adc2slc(adcData,...
+                                   rangeBinSize,...
+                                   filt_type,...
+                                   numAngles,...
+                                   antenna_azimuthonly);
+                
+                % Pre-allocate sub-chunk arrays safely using predicted tracking constraints
+                if processedOutputCounter == 1
+                    spatialSize = size(complex_data_static_tmp);
+                    complex_data_static = zeros([spatialSize, predictedActiveFrames]);
+                    x_axis = x_axis_raw;
+                    y_axis = y_axis_raw;
+                end
+                
+                complex_data_static(:,:,processedOutputCounter) = complex_data_static_tmp;
+                
+                if exist('lineLength','var')
+                    fprintf(repmat('\b',1,lineLength));
+                end
+                print_str = sprintf("Step %02d: Global Frame %5d processed (Sub-Chunk Active Index: %d/%d).",...
+                                    step_i,...
+                                    absoluteRawFrameCounter,...
+                                    processedOutputCounter,...
+                                    predictedActiveFrames);
+                lineLength = fprintf("%s\n",print_str);
+            end
+            clearvars lineLength
+            
+            % Progress pointers onto next sub-chunk boundary loop indices
+            subChunkStartIdx = subChunkEndIdx + 1;
+            
+            % If sub-chunk had no valid records, continue scanning ahead
+            if processedOutputCounter == 0
+                continue;
+            end
+            
+            % Increment tracking sequence for output filenames
+            savedFileCounter = savedFileCounter + 1;
+            
+            % Trim buffer allocations if loops terminate prematurely
+            if processedOutputCounter < size(complex_data_static, 3)
+                complex_data_static(:,:,processedOutputCounter+1:end) = [];
+            end
+            
+            ind = strfind(path_files, filesep);
+            testName = path_files(ind(end-1)+1:(ind(end)-1));
+            path_mat_03 = fullfile(path_out,sprintf("%s_%05d.mat", testName, savedFileCounter)); 
+            
+            %% Calculate Coherence of first to second, to N/2, and to N
+            step_i = step_i + 1;
+            fprintf('Step %02d: Calculate Coherences.\n',step_i);
+            step_i = step_i + 1;
+            coherence = zeros(size(complex_data_static));
+            N_slc = size(complex_data_static,3);
+            for slc_i = 1:N_slc
+                coherence(:,:,slc_i) = get_coherence(complex_data_static(:,:,1),...
+                                                    complex_data_static(:,:,slc_i),...
+                                                    3);
+                if exist('lineLength','var')
+                    fprintf(repmat('\b',1,lineLength));
+                end
+                print_str = sprintf("Step %02d: Frame % 5d / %d processed (Coherence).",...
+                                    step_i,...
+                                    slc_i,...
+                                    N_slc);
+                lineLength = fprintf("%s\n",print_str);
+            end
+            coh_mean = mean(coherence,3);
+            coh_std = std(coherence,[],3);
+            coh_class_tresh = 0.6;
+            coh_mat_e_filt = ones(size(coh_mean));
+            coh_mat_e_filt(squeeze(coherence(:,:,end))<=coh_class_tresh) = 0;
+            coh_mat_s_filt = 2 * ones(size(coh_mean));
+            coh_mat_s_filt(squeeze(coherence(:,:,2))<=coh_class_tresh) = 0;
+            coh_class = coh_mat_e_filt-coh_mat_s_filt;
+            
+            %% Visualise Data Amplitudes and Coherences
+            step_i = step_i + 1;
+            fprintf('Step %02d: Visualise Amplitudes and Coherences\n',step_i);
+            close all
+            fig = figure('units','normalized','outerposition',[0 0 1 1], 'Visible','off');
+            amp = abs(complex_data_static);
+            % Amplitude Image
+            ax(1)=subplot(2,2,1);
+            plot_polar_range_azimuth_2D_AB_preAX(y_axis,...
+                                                x_axis,...
+                                                log10(mean(amp,3)));
+            hcb = colorbar;
+            hcb.Label.String = "Amplitude [log10(A)]";
+            ax(2)=subplot(2,2,2);
+            dim=ndims(complex_data_static);
+            n_max = 4000;
+            if size(complex_data_static,dim)>n_max
+                n_skip = ceil(size(complex_data_static,dim)/n_max);
+            else
+                n_skip = 1;
+            end
+            if dim==3
+                amptmp = squeeze(amp(:,:,1:n_skip:end));
+            else
+                error('Data format for Amplitude with given Dimension is unknown!\n');
+            end
+            amp_sigma = std(amptmp,[],3);
+            amp_mu = mean(amptmp,3);
+            plt_asi = 1 - (amp_sigma ./ amp_mu);
+            plt_asi(plt_asi<=0) = 0;
+            plot_polar_range_azimuth_2D_AB_preAX(y_axis,...
+                                                  x_axis,...
+                                                  plt_asi);
+            hcb = colorbar;
+            hcb.Label.String = "Amplitude Stability Index [-]";
+            climits = [prctile(plt_asi(:),50),prctile(plt_asi(:),95)];
+            if climits(1) >= climits(2), climits(2) = climits(1) + 1; end
+            clim(climits);
+            caxis(climits);
+            ax(3)=subplot(2,2,3);
+            plot_polar_range_azimuth_2D_AB_preAX(y_axis,...
+                                                  x_axis,...
+                                                  coh_mean);
+            hcb = colorbar;
+            hcb.Label.String = "Mean Coherence [0...1]";
+            climits = [prctile(coh_mean(:),50),prctile(coh_mean(:),90)];
+            if climits(1) >= climits(2), climits(2) = climits(1) + 1; end
+            clim(climits);
+            caxis(climits);
+            ax(4)=subplot(2,2,4);
+            plot_polar_range_azimuth_2D_AB_preAX(y_axis,...
+                                                  x_axis,...
+                                                  coh_std);
+            colormap(ax(4), flipud(colormap))
+            hcb = colorbar;
+            hcb.Label.String = "Standard Deviation of Coherence";
+            climits = [prctile(coh_std(:),5),prctile(coh_std(:),50)];
+            if climits(1) >= climits(2), climits(2) = climits(1) + 1; end
+            clim(climits);
+            caxis(climits);
+            Link = linkprop(ax,LocateLinkFields(ax));
+            setappdata(gcf, 'StoreTheLink', Link);
+            sgtitle(sprintf('%s - Amplitude and Coherence (%d)',replace(proj_name,'_',' '),savedFileCounter));
+            exportgraphics(fig,replace(path_mat_03,'.mat','_1.png'),'Resolution',600);
+            savefig(fig,replace(path_mat_03,'.mat','_1.fig'));
+            
+            %% Compress Data by Filtering based Spatial Thresholds
+            step_i = step_i + 1;
+            fprintf('Step %02d: Compress Data by Filtering based:\n',step_i);
+            if filt_by_dist{1}
+                fprintf('- Range Limits (%.2f - %.2f m)\n',filt_by_dist{2},filt_by_dist{3});
+                rng = sqrt(x_axis(1,:).^2+y_axis(1,:).^2);
+                idx_rmv = rng<filt_by_dist{2} | rng>filt_by_dist{3};
+                x_axis(:,idx_rmv) = []; 
+                y_axis(:,idx_rmv) = []; 
+                complex_data_static(:,idx_rmv,:) = [];
+                coherence(:,idx_rmv,:) = [];
+                coh_mean(:,idx_rmv) = [];
+                coh_std(:,idx_rmv) = [];
+                coh_class(:,idx_rmv) = [];
+            end
+            if filt_by_azi{1}
+                azi = atan2(y_axis(:,1),x_axis(:,1)) * 180 / pi;
+                if length(filt_by_azi) == 2
+                    fprintf('- Azimuth Limits (-%.1f - %.1f deg)\n',...
+                                            abs(filt_by_azi{2}),...
+                                            abs(filt_by_azi{2}));
+                    filt_azi = abs(azi)<=abs(filt_by_azi{2});
+                else
+                    fprintf('- Azimuth Limits (%.1f - %.1f deg)\n',...
+                                            min(filt_by_azi{2:3}),...
+                                            max(filt_by_azi{2:3}));
+                    filt_azi = azi >= min(filt_by_azi{2:3}) & ...
+                               azi <= max(filt_by_azi{2:3});
+                end
+                idx_rmv = ~filt_azi;
+                x_axis(idx_rmv,:) = []; 
+                y_axis(idx_rmv,:) = []; 
+                complex_data_static(idx_rmv,:,:) = [];
+                coherence(idx_rmv,:,:) = [];
+                coh_mean(idx_rmv,:) = [];
+                coh_std(idx_rmv,:) = [];
+                coh_class(idx_rmv,:) = [];
+            end
+            x_axis_coh = x_axis;
+            y_axis_coh = y_axis;
+            if filt_by_asi{1} == 1
+                if length(filt_by_asi{2}) == 1
+                    fprintf('- Amplitude Stability Index (>=%.2f)\n',filt_by_asi{2});
+                end
+                [complex_data_static,x_axis,y_axis,filt_by_asi{2},idx_a,idx_b] = ...
+                    filter_by_asi(complex_data_static,...
+                                  x_axis,...
+                                  y_axis,...
+                                  savedFileCounter,...
+                                  filt_by_asi{2});
+                % Update Coherences
+                coherence_tmp = zeros(size(complex_data_static,1), size(coherence,3));
+                coh_mean_tmp = zeros(length(idx_a),1);
+                coh_std_tmp = coh_mean_tmp;
+                coh_class_tmp = coh_mean_tmp;
+                for idx_i = 1:length(idx_a)
+                    coherence_tmp(idx_i,:) = coherence(idx_a(idx_i),idx_b(idx_i),:);
+                    coh_mean_tmp(idx_i,:) = coh_mean(idx_a(idx_i),idx_b(idx_i));
+                    coh_std_tmp(idx_i,:) = coh_std(idx_a(idx_i),idx_b(idx_i));
+                    coh_class_tmp(idx_i,:) = coh_class(idx_a(idx_i),idx_b(idx_i));
+                end
+                coherence = coherence_tmp;
+                coh_mean = coh_mean_tmp;
+                coh_std = coh_std_tmp;
+                coh_class = coh_class_tmp;
+                x_axis_coh = x_axis;
+                y_axis_coh = y_axis;
+            else
+                [m,n,o] = size(complex_data_static);
+                complex_data_static = reshape(complex_data_static,m*n,o);
+                x_axis = reshape(x_axis,m*n,[]);
+                y_axis = reshape(y_axis,m*n,[]);
+                coherence = reshape(coherence,m*n,o);
+                coh_mean = reshape(coh_mean,m*n,[]);
+                coh_std = reshape(coh_std,m*n,[]);
+                coh_class = reshape(coh_class,m*n,[]);
+                x_axis_coh = x_axis;
+                y_axis_coh = y_axis;
+            end
+            step_i = step_i + 1;
+            fprintf('Step %02d: Visualise Filtered Image: Amplitude\n',step_i);
+            fig2 = figure('units','normalized','outerposition',[0 0 1 1], 'Visible','off');
+            amp = abs(complex_data_static);
+            r=sqrt(y_axis.^2+x_axis.^2)*1.4*pi/180*100;
+            scatter(y_axis,x_axis,r,log10(mean(amp,2)),'filled');
+            hcb = colorbar;
+            hcb.Label.String = "Amplitude [log10(A)]";
+            axis equal; box on;
+            xlabel('Cross Range [m]'); ylabel('Along Range [m]');
+            sgtitle(sprintf('%s - Filtered Amplitude Image (%d)',replace(proj_name,'_',' '),savedFileCounter));
+            exportgraphics(fig2,replace(path_mat_03,'.mat','_2.png'),'Resolution',600);
+            savefig(fig2,replace(path_mat_03,'.mat','_2.fig'));
+            
+            %% Saving Sub-Chunk Data Block to MAT-File
+            coh.class = coh_class;
+            coh.class_id = [-2,-1,0,1];
+            coh.class_descr = {'Higher Coherence at Start',...
+                               'High Coherence',...
+                               'Low Coherence',...
+                               'Higher Coherence at End'};
+            coh.coh_1N = coherence;
+            coh.mean   = coh_mean;
+            coh.std    = coh_std;
+            coh.x_axis = x_axis_coh;
+            coh.y_axis = y_axis_coh;
+            step_i = step_i + 1;
+            fprintf('Step %02d: Saving Sub-Chunk Data Block to MAT-File\n',step_i);
+            
+            save(path_mat_03,...
+                'complex_data_static',...
+                'coh',...
+                'x_axis',...
+                'y_axis',...
+                'numAngles',...
+                '-v7.3');
+        end
+        % Update final tracking index markers safely
+        totalFramesPrior = totalFramesPrior + numValidFrames;
+    end
+    ID = ID + 1;
+end
+
+function fields = LocateLinkFields(ax)
+    % Internal dynamic lookup helper to maintain code compliance across older graphics links
+    fields = {'CameraUpVector', 'CameraPosition', 'CameraTarget', 'XLim', 'YLim'};
+    if ~isprop(ax(1), 'CameraUpVector')
+        fields = {'XLim', 'YLim'};
+    end
 end
